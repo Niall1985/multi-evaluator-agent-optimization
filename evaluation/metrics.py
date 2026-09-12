@@ -7,6 +7,10 @@ from core.groq_client import GroqLLMClient
 from .base import BaseEvaluator, EvaluatorResult
 
 
+from .runner import CodeExecutionRunner
+from tasks.benchmark_tasks import BenchmarkTask
+
+
 class FunctionalCorrectnessEvaluator(BaseEvaluator):
     """mu_1: Functional Correctness (Unit Tests) - Deterministic pass rate on benchmark assertions ($0.001)."""
 
@@ -20,51 +24,39 @@ class FunctionalCorrectnessEvaluator(BaseEvaluator):
         agent_output: str,
         execution_context: Optional[Dict[str, Any]] = None,
     ) -> EvaluatorResult:
-        start_time = time.time()
-        test_cases = task.get("test_cases", [])
-        if not test_cases:
-            return EvaluatorResult(self.name, 1.0, self.cost, (time.time() - start_time) * 1000)
-
-        # Extract python code block if present
-        code = self._extract_code(agent_output)
+        start_time = time.perf_counter()
         
-        passed = 0
-        total = len(test_cases)
-        
-        # Execute tests in isolated namespace
-        namespace: Dict[str, Any] = {}
-        try:
-            exec(code, namespace)
-            solve_fn = namespace.get("solve") or namespace.get(task.get("entry_point", "solve"))
-            
-            if callable(solve_fn):
-                for test in test_cases:
-                    inputs = test.get("input", ())
-                    expected = test.get("expected")
-                    try:
-                        if isinstance(inputs, tuple):
-                            result = solve_fn(*inputs)
-                        elif isinstance(inputs, dict):
-                            result = solve_fn(**inputs)
-                        else:
-                            result = solve_fn(inputs)
-                        if result == expected:
-                            passed += 1
-                    except Exception:
-                        pass
-            else:
-                passed = 0
-        except Exception:
-            passed = 0
+        # Build BenchmarkTask representation if dict passed
+        task_obj = BenchmarkTask(
+            id=task.get("id", "task_custom"),
+            name=task.get("name", "Custom Task"),
+            category=task.get("category", "General"),
+            description=task.get("description", ""),
+            entry_point=task.get("entry_point", "solve"),
+            test_cases=task.get("test_cases", []),
+            edge_cases=task.get("edge_cases", []),
+            constraints=task.get("constraints", ""),
+        )
 
-        score = float(passed / total) if total > 0 else 0.0
-        elapsed_ms = (time.time() - start_time) * 1000
+        report = CodeExecutionRunner.run_task(
+            task=task_obj,
+            agent_output=agent_output,
+            include_test_cases=True,
+            include_edge_cases=False,
+        )
+
+        elapsed_ms = (time.perf_counter() - start_time) * 1000.0
         return EvaluatorResult(
             evaluator_name=self.name,
-            score=round(score, 4),
+            score=round(report.pass_rate, 4),
             cost=self.cost,
             execution_time_ms=elapsed_ms,
-            details={"passed": passed, "total": total},
+            details={
+                "passed": report.passed_count,
+                "total": report.total_count,
+                "syntax_error": report.syntax_error,
+                "latency_ms": round(report.latency_ms, 3),
+            },
         )
 
     def _extract_code(self, text: str) -> str:
@@ -208,50 +200,38 @@ class EdgeCaseStressEvaluator(BaseEvaluator):
         agent_output: str,
         execution_context: Optional[Dict[str, Any]] = None,
     ) -> EvaluatorResult:
-        start_time = time.time()
-        edge_cases = task.get("edge_cases", [])
-        if not edge_cases:
-            return EvaluatorResult(self.name, 1.0, self.cost, (time.time() - start_time) * 1000)
+        start_time = time.perf_counter()
+        
+        task_obj = BenchmarkTask(
+            id=task.get("id", "task_custom"),
+            name=task.get("name", "Custom Task"),
+            category=task.get("category", "General"),
+            description=task.get("description", ""),
+            entry_point=task.get("entry_point", "solve"),
+            test_cases=task.get("test_cases", []),
+            edge_cases=task.get("edge_cases", []),
+            constraints=task.get("constraints", ""),
+        )
 
-        code = self._extract_code(agent_output)
-        passed = 0
-        total = len(edge_cases)
+        report = CodeExecutionRunner.run_task(
+            task=task_obj,
+            agent_output=agent_output,
+            include_test_cases=False,
+            include_edge_cases=True,
+        )
 
-        namespace: Dict[str, Any] = {}
-        try:
-            exec(code, namespace)
-            solve_fn = namespace.get("solve") or namespace.get(task.get("entry_point", "solve"))
-            if callable(solve_fn):
-                for test in edge_cases:
-                    inputs = test.get("input", ())
-                    expected = test.get("expected")
-                    expect_exception = test.get("expect_exception", False)
-                    try:
-                        if isinstance(inputs, tuple):
-                            result = solve_fn(*inputs)
-                        elif isinstance(inputs, dict):
-                            result = solve_fn(**inputs)
-                        else:
-                            result = solve_fn(inputs)
-                        
-                        if not expect_exception and result == expected:
-                            passed += 1
-                    except Exception:
-                        if expect_exception:
-                            passed += 1
-            else:
-                passed = 0
-        except Exception:
-            passed = 0
-
-        score = float(passed / total) if total > 0 else 0.0
-        elapsed_ms = (time.time() - start_time) * 1000
+        elapsed_ms = (time.perf_counter() - start_time) * 1000.0
         return EvaluatorResult(
             evaluator_name=self.name,
-            score=round(score, 4),
+            score=round(report.pass_rate, 4),
             cost=self.cost,
             execution_time_ms=elapsed_ms,
-            details={"passed_edge_cases": passed, "total_edge_cases": total},
+            details={
+                "passed_edge_cases": report.passed_count,
+                "total_edge_cases": report.total_count,
+                "syntax_error": report.syntax_error,
+                "latency_ms": round(report.latency_ms, 3),
+            },
         )
 
     def _extract_code(self, text: str) -> str:

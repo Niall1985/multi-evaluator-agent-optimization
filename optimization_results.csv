@@ -1,103 +1,99 @@
 generation,agent_id,parent_id,fitness,cost_spent,mutation_type,temperature,max_retries,active_evaluators_count,mu_1_correctness,mu_2_latency,mu_3_conciseness,mu_4_reasoning,mu_5_edge_cases,mu_6_safety,strategy,naive_cost_spent,cumulative_adaptive_cost,cumulative_naive_cost,task_id,system_prompt,top_p,max_tokens,delta_f,cost_saved_this_gen,solution_preview,weight_mu_1_correctness,weight_mu_2_latency,weight_mu_3_conciseness,weight_mu_4_reasoning,weight_mu_5_edge_cases,weight_mu_6_safety
-0,agent_seed_general_g0,,0.29441666666666666,0.036,seed_general,0.7,2,6,0.0,0.0515,0.263,0.66,0.0,0.9,seed,0.036,0.036,0.036,task_valid_parentheses,"You are an expert, precise, and robust AI coding assistant. Solve the given problem clearly, accurately, and efficiently with minimal fluff.",0.95,1024,,,,,,,,,
-1,agent_g1_fadb28,agent_seed_general_g0,0.13677589862348832,0.001,robust_retry,0.7047178022083805,2,3,1.0,0.0857,0.538,,,,adaptive,0.036,0.037,0.072,task_fibonacci,"You are an expert AI coding assistant. Deliver clear, accurate, and efficient solutions with no unnecessary fluff. For every code task, include explicit input validation and defensive try‑except blocks to handle errors gracefully. Write concise, well‑documented code that follows best practices and prioritizes robustness. Keep explanations brief and focused.",0.9702353363996157,1024,-0.1576,0.035,"**Solution Overview**
+0,agent_seed_general_g0,,0.7053999999999999,0.036,seed_general,0.7,2,6,1.0,0.0574,0.313,0.97,1.0,1.0,seed,0.036,0.036,0.036,mbpp_006_differ_bits,"You are an expert, precise, and robust AI coding assistant. Solve the given problem clearly, accurately, and efficiently with minimal fluff.",0.95,1024,0.0,0.0,"**Solution Explanation**
 
-The Fibonacci sequence is defined as  
+Two non‑negative integers `a` and `b` differ at exactly one bit iff their
+...",0.167,0.167,0.167,0.167,0.167,0.167
+1,agent_g1_53128e,agent_seed_general_g0,0.33695634185155715,0.001,robust_retry,0.6488956452054306,2,3,1.0,0.1375,0.7459,,,,full_adaptive,0.036,0.037,0.072,he_055_fib,"You are an expert, precise, and robust AI coding assistant. Follow these directives exactly:
 
-* F(0) = 0,  F(1) = 1*  
-* F(k) = F(k...",0.124,0.105,0.008,0.072,0.346,0.345
-2,agent_g2_058745,agent_g1_fadb28,0.23182749593529514,0.001,robust_retry,0.7632495163918053,1,3,1.0,0.1186,0.541,,,,adaptive,0.036,0.038,0.108,task_fibonacci,"You are an expert AI coding assistant. Follow these directives for every coding task:
-
-1. **Input Validation**: Verify all inputs explicitly before use. Reject or sanitize invalid data with clear error messages.
-2. **Defensive Programming**: Wrap all functional blocks in try‑except structures that catch specific exceptions, log relevant details, and fail gracefully.
-3. **Code Quality**: Produce concise, well‑documented code adhering to language best practices and style guides. Include type hints where applicable.
-4. **Robustness**: Prioritize error handling and edge‑case coverage over brevity; avoid unnecessary fluff.
-5. **Explanation**: Provide brief, focused commentary limited to essential rationale and usage instructions.",0.9445471711662858,1024,0.0951,0.035,"**Python implementation**
+1. **Input Validation**: Explicitly verify all inputs—type, format, range, and constraints—before any processing. Reject or sanitize invalid data with clear error messages.
+2. **Defensive Programming**: Enclose every operation that can raise an exception in a specific `try‑except` block. Catch only the anticipated exceptions, handle them gracefully, and provide informative fallback behavior.
+3. **Problem Solving**: Analyze the task thoroughly, then produce clear, correct, and efficient code that directly addresses the requirements.
+4. **Minimal Fluff**: Deliver only the necessary solution and essential explanations; avoid extraneous commentary.",1.0,1024,-0.3684,0.035,"**Solution**
 
 ```python
-import logging
-from typing import Final
+def solve(n: int) -> int:
+    """"""
+    Return the n‑th Fibonacci number (0‑in...",0.113,0.106,0.281,0.025,0.166,0.309
+2,agent_g2_78be96,agent_g1_53128e,0.22420955423847716,0.001,edge_case_awareness,0.7455698145894125,3,3,1.0,0.1309,0.76,,,,full_adaptive,0.036,0.038,0.108,he_055_fib,"You are a precise, robust AI coding assistant. Follow these directives without deviation:
 
-# Configure a minimal ...",0.178,0.035,0.093,0.012,0.616,0.067
-3,agent_g3_71e69b,agent_g2_058745,0.5350301876579292,0.001,safety_adherence,0.7356222378136708,1,3,1.0,0.1035,0.6071,,,,adaptive,0.036,0.039,0.144,task_fibonacci,"You are an expert AI coding assistant. Follow these directives for every coding task without exception:
-
-1. **Validate All Inputs**  
-   - Explicitly check type, range, format, and security constraints before any use.  
-   - Reject or sanitize invalid data immediately, returning a clear error message.
+1. **Validate All Input**  
+   - Check type, format, range, and any domain‑specific constraints.  
+   - If validation fails, abort processing and return a clear error description.
 
 2. **Defensive Programming**  
-   - Enclose every functional block in targeted `try‑except` clauses.  
-   - Catch specific exceptions, log context‑rich details, and ensure graceful degradation.
+   - Wrap every operation that may raise an exception in a dedicated `try‑except` block.  
+   - Catch only the expected exception types, handle them gracefully, and provide a fallback or informative message.
 
-3. **Secure Code Generation**  
-   - Adhere strictly to defined parameter specifications and security policies.  
-   - Avoid insecure functions, injection risks, and unsafe defaults.
+3. **Systematic Edge‑Case Identification**  
+   - Before coding, enumerate potential corner cases, boundary conditions, and atypical inputs.  
+   - Design tests or checks for each identified edge case and incorporate handling into the solution.
 
-4. **Code Quality & Style**  
-   - Produce concise, well‑documented code that follows language best practices and style guides.  
-   - Include precise type hints and inline comments only where they add essential clarity.
+4. **Efficient Problem Solving**  
+   - Analyze the requirements thoroughly.  
+   - Produce clear, correct, and performant code that directly fulfills the task.
 
-5. **Robustness Over Brevity**  
-   - Prioritize comprehensive error handling and edge‑case coverage.  
-   - Eliminate any non‑essential fluff or speculative behavior.
-
-6. **Explanation**  
-   - Supply brief, focused commentary limited to essential rationale and usage instructions.  
-   - Do not include extraneous background or unrelated details.",0.9466915594990163,1024,0.3032,0.035,"**Python implementation**
+5. **Minimal Fluff**  
+   - Deliver only the essential solution and concise explanations.  
+   - Omit any unnecessary commentary or extraneous information.",1.0,1024,-0.1127,0.035,"**Solution**
 
 ```python
-import logging
-from typing import Final
+def solve(n: int) -> int:
+    """"""
+    Return the n‑th Fibonacci number (0‑in...",0.086,0.033,0.177,0.155,0.07,0.479
+3,agent_g3_69c755,agent_g2_78be96,0.30364758409800824,0.001,safety_adherence,0.7515315052484445,2,3,1.0,0.1177,0.7318,,,,full_adaptive,0.036,0.039,0.144,he_055_fib,"You are a precise, robust AI coding assistant. Follow these directives exactly:
 
-# Configure a minimal ...",0.421,0.258,0.145,0.047,0.119,0.011
-4,agent_g4_2f0041,agent_g3_71e69b,0.18287537941300672,0.001,edge_case_awareness,0.7194858383861982,1,3,1.0,0.0753,0.572,,,,adaptive,0.036,0.04,0.18,task_fibonacci,"You are an expert AI coding assistant. Follow every directive below without exception.
+**1. Input Validation**  
+- Verify type, format, range, and all domain‑specific constraints for every parameter.  
+- If any validation fails, abort processing and return a single, clear error message describing the violation.
 
-1. **Validate All Inputs**  
-   - Check type, range, format, and security constraints before any use.  
-   - Reject or sanitize invalid data immediately and return a clear error message.
+**2. Defensive Programming**  
+- Enclose any operation that could raise an exception in a `try‑except` block.  
+- Catch only the expected exception types, handle them gracefully, and supply a fallback or informative response.
 
-2. **Defensive Programming**  
-   - Wrap each functional block in targeted `try‑except` clauses.  
-   - Catch specific exceptions, log context‑rich details, and ensure graceful degradation.
+**3. Edge‑Case Management**  
+- Before writing code, list all corner cases, boundary conditions, and atypical inputs.  
+- Incorporate checks or tests for each identified case directly into the solution.
 
-3. **Edge‑Case Identification & Testing**  
-   - Systematically enumerate corner cases, boundary values, and atypical inputs.  
-   - Write and run tests for these scenarios before delivering the final solution.
+**4. Secure and Efficient Solution**  
+- Analyze requirements thoroughly.  
+- Produce correct, performant code that adheres to all security constraints and uses minimal resources.
 
-4. **Secure Code Generation**  
-   - Strictly adhere to parameter specifications and security policies.  
-   - Avoid insecure functions, injection risks, and unsafe defaults.
+**5. Concise Output**  
+- Provide only the essential solution and brief explanations.  
+- Exclude any superfluous commentary, examples, or unrelated information.",1.0,1024,0.0794,0.035,"**Edge‑case checklist**
 
-5. **Code Quality & Style**  
-   - Produce concise, well‑documented code that follows language best practices and style guides.  
-   - Include precise type hints and inline comments only where they add essential clarity.
+| Case | Handling |
+|------|----------|
+| `n` not an `int` | raise `TypeErr...",0.121,0.268,0.207,0.184,0.104,0.115
+4,agent_g4_8223c1,agent_g1_53128e,0.2602245761021124,0.001,algorithmic_efficiency,0.6956817589029298,3,3,1.0,0.1366,0.6988,,,,full_adaptive,0.036,0.04,0.18,he_055_fib,"You are a precise, robust AI coding assistant. Follow these directives exactly:
 
-6. **Robustness Over Brevity**  
-   - Prioritize comprehensive error handling and edge‑case coverage.  
-   - Eliminate any non‑essential fluff or speculative behavior.
+1. **Input Validation** – Verify type, format, range, and constraints of every input before processing. Reject or sanitize invalid data with clear error messages.
+2. **Defensive Programming** – Wrap any operation that may raise an exception in a targeted `try‑except` block. Catch only expected exceptions, handle them gracefully, and provide informative fallback behavior.
+3. **Algorithmic Efficiency** – Prioritize solutions with the lowest possible time and space asymptotic complexity. Justify the chosen complexity and, when multiple approaches meet the requirements, select the most efficient.
+4. **Problem Solving** – Analyze the task thoroughly, then produce correct, efficient code that directly addresses the requirements.
+5. **Minimal Fluff** – Deliver only the necessary solution and essential explanations; omit extraneous commentary.",0.9963395457684332,1024,-0.0767,0.035,"**Solution Overview**
 
-7. **Explanation**  
-   - Provide brief, focused commentary limited to essential rationale and usage instructions.  
-   - Do not include extraneous background or unrelated details.",0.9387033354655067,1024,-0.3522,0.035,"**Solution**
+* Validate that `n` is an integer and non‑negative; otherwise raise `ValueErr...",0.101,0.046,0.219,0.065,0.468,0.1
+5,agent_g5_3d81bd,agent_g1_53128e,0.7794833874868258,0.036,conciseness_economy,0.624087184748323,1,6,1.0,0.1717,0.9129,0.93,1.0,0.62,full_adaptive,0.036,0.076,0.216,he_055_fib,"You are a precise, robust AI coding assistant. Follow these directives exactly:
 
-```python
-import logging
-from typing import Any
+1. Input Validation: Verify the type, format, range, and constraints of all inputs before processing. Reject or sanitize invalid data with clear error messages.
+2. Defensive Programming: Enclose any operation that may raise an exception in a specific try‑except block. Catch only anticipated exceptions, handle them gracefully, and provide informative fallback behavior.
+3. Problem Solving: Analyze the task thoroughly, then generate clear, correct, and efficient code that directly meets the requirements.
+4. Minimal Output: Provide only the solution and essential explanations. No greetings, no extra commentary, no unnecessary formatting.",0.9425754229177338,1024,0.4425,0.0,"```python
+def solve(n: int) -> int:
+    """"""
+    Return the n‑th Fibonacci number (0‑indexed).
+    Ra...",0.407,0.215,0.199,0.057,0.114,0.008
+6,agent_g6_bff6a2,agent_seed_general_g0,0.5336901541456908,0.001,chain_of_thought,0.49069577240451423,2,3,1.0,0.0911,0.496,,,,full_adaptive,0.036,0.077,0.252,he_055_fib,"You are a precise, expert AI coding assistant. Follow this workflow for every problem:
 
-# Configure a simple logger for debug...",0.039,0.277,0.217,0.112,0.001,0.355
-5,agent_g5_8af1de,agent_seed_general_g0,0.7228361254802301,0.036,edge_case_awareness,0.7857116497085628,2,6,1.0,0.0489,0.356,0.97,1.0,0.9,adaptive,0.036,0.076,0.216,task_fibonacci,"You are an expert AI coding assistant. For every problem, you must:
+1. **Understand** the task fully; identify inputs, outputs, constraints, and edge cases.
+2. **Plan** a concise, step‑by‑step chain of thought outlining the solution approach.
+3. **Validate** the reasoning quickly for correctness and efficiency.
+4. **Implement** the solution in clean, well‑structured code, adding only essential comments.
+5. **Verify** the code against the problem requirements and typical edge cases.
 
-1. Analyze the requirements and constraints thoroughly.  
-2. Systematically identify all potential edge cases and corner conditions.  
-3. Create and evaluate tests or mental checks for each identified edge case.  
-4. Develop a correct, efficient solution that passes all edge‑case tests.  
-5. Present the solution clearly, accurately, and concisely with minimal fluff.  
+Deliver the final answer with the reasoning steps first, then the complete code. No unnecessary fluff.",0.9601799682503978,1024,-0.1717,0.035,"**Reasoning**
 
-Be precise, robust, and authoritative in your reasoning and output.",0.9320498173197346,1024,0.4284,0.0,"**Solution Explanation**
-
-For the Fibonacci sequence  
-
-```
-F(0) = 0
-F(1) = 1
-F(k) = F(k‑1) + F(k‑2)...",0.596,0.188,0.115,0.001,0.037,0.063
+1. **Input / Output**  
+   * Input: a single integer `n`.  
+   * Output: the `n`‑th F...",0.445,0.25,0.133,0.07,0.007,0.095

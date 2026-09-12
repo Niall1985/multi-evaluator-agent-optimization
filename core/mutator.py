@@ -1,6 +1,6 @@
 import random
 import numpy as np
-from typing import Tuple
+from typing import Tuple, Optional, List
 from .agent import Agent, HarnessKnobs
 from .groq_client import GroqLLMClient
 
@@ -20,9 +20,20 @@ class PromptMutator:
     def __init__(self, llm_client: GroqLLMClient):
         self.llm_client = llm_client
 
-    def mutate(self, parent: Agent, generation: int) -> Tuple[Agent, str, str]:
+    def get_available_strategies(self) -> List[Tuple[str, str]]:
+        return list(MUTATION_STRATEGIES)
+
+    def mutate(
+        self,
+        parent: Agent,
+        generation: int,
+        strategy_tuple: Optional[Tuple[str, str]] = None,
+    ) -> Tuple[Agent, str, str]:
         """Creates a mutated child agent from a parent candidate."""
-        strategy_name, strategy_goal = random.choice(MUTATION_STRATEGIES)
+        if strategy_tuple:
+            strategy_name, strategy_goal = strategy_tuple
+        else:
+            strategy_name, strategy_goal = random.choice(MUTATION_STRATEGIES)
         
         # 1. Mutate prompt via Groq LLM (or mock)
         system_instruction = (

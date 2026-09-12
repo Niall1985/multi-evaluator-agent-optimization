@@ -30,7 +30,7 @@ class TestMultiObjectiveAgentOptimization(unittest.TestCase):
     """Unit and Integration tests for the Multi-Objective Agent Optimization system."""
 
     def setUp(self):
-        self.llm_client = GroqLLMClient(api_key="", model="openai/gpt-oss-120b")
+        self.llm_client = GroqLLMClient(is_mock=True, model="openai/gpt-oss-120b")
         self.pool = EvaluatorPool(llm_client=self.llm_client)
 
     def test_agent_dataclass_and_clone(self):
@@ -53,8 +53,7 @@ class TestMultiObjectiveAgentOptimization(unittest.TestCase):
         self.assertTrue(len(response) > 0)
         
         # Test explicit mock mode
-        mock_client = GroqLLMClient(api_key="")
-        mock_client.is_mock = True
+        mock_client = GroqLLMClient(is_mock=True)
         mock_resp = mock_client._mock_generate("evaluate code", "def solve(): return True", 0.7)
         self.assertTrue("Score:" in mock_resp or "0." in mock_resp)
 
@@ -71,7 +70,7 @@ class TestMultiObjectiveAgentOptimization(unittest.TestCase):
         self.assertTrue(len(mutated_prompts) >= 3)
 
     def test_all_6_evaluators(self):
-        task = BENCHMARK_TASKS[0]  # Fibonacci
+        task = get_benchmark_task("he_055_fib")
         sample_solution = (
             "```python\n"
             "def solve(n: int) -> int:\n"
@@ -174,16 +173,16 @@ class TestMultiObjectiveAgentOptimization(unittest.TestCase):
 
     def test_end_to_end_controller_evolution(self):
         controller = EvolutionController(
-            api_key="",
+            is_mock=True,
             model="openai/gpt-oss-120b",
             lambda_penalty=0.5,
-            default_strategy="adaptive",
+            default_strategy="full_adaptive",
         )
         self.assertEqual(controller.current_generation, 0)
         self.assertEqual(len(controller.archive.agents), 1)
 
         # Run 3 generations
-        results = controller.run_n_generations(3, strategy="adaptive")
+        results = controller.run_n_generations(3, strategy="full_adaptive")
         self.assertEqual(len(results), 3)
         self.assertEqual(controller.current_generation, 3)
         self.assertEqual(len(controller.archive.agents), 4)
@@ -213,19 +212,126 @@ class TestMultiObjectiveAgentOptimization(unittest.TestCase):
             os.remove(csv_file)
 
     def test_stock_exchange_and_task_selection(self):
-        stock_task = get_benchmark_task("task_stock_exchange")
+        stock_task = get_benchmark_task("mbpp_274_stock_exchange")
         self.assertIsNotNone(stock_task)
-        self.assertEqual(stock_task.name, "Best Time to Buy & Sell Stock (Stock Exchange)")
+        self.assertEqual(stock_task.name, "Best Time to Buy & Sell Stock (MBPP/274)")
 
         controller = EvolutionController(
-            api_key="",
+            is_mock=True,
             model="openai/gpt-oss-120b",
             initial_archetype="Algorithmic Specialist Agent",
-            selected_task_id="task_stock_exchange",
+            selected_task_id="mbpp_274_stock_exchange",
         )
         self.assertEqual(controller.initial_archetype, "Algorithmic Specialist Agent")
-        res = controller.run_generation(strategy="adaptive")
+        res = controller.run_generation(strategy="full_adaptive")
         self.assertEqual(controller.current_generation, 1)
+
+    def test_all_7_canonical_tasks_with_runner(self):
+        from evaluation.runner import CodeExecutionRunner
+        runner = CodeExecutionRunner(timeout_sec=2.0)
+        self.assertEqual(len(BENCHMARK_TASKS), 7)
+
+        # Ensure mock client produces solutions for each task that execute cleanly
+        for task in BENCHMARK_TASKS:
+            code = self.llm_client.generate("Write code", f"Task: {task.id}\n{task.description}")
+            report = runner.run_task(
+                task=task,
+                agent_output=code,
+                include_test_cases=True,
+                include_edge_cases=True,
+            )
+            self.assertEqual(report.total_test_cases, len(task.test_cases))
+            self.assertEqual(report.total_edge_cases, len(task.edge_cases))
+            # Mock solutions should pass the standard test cases
+            self.assertEqual(report.passed_test_cases, report.total_test_cases, f"Task {task.id} failed test cases: {report.errors}")
+
+    def test_ucb1_mutation_bandit(self):
+        from optimization.bandit import UCB1MutationBandit
+        from core.mutator import MUTATION_STRATEGIES
+
+        bandit = UCB1MutationBandit(arms=MUTATION_STRATEGIES, c=1.414)
+        # Pull all arms once first
+        pulled = []
+        for _ in range(len(MUTATION_STRATEGIES)):
+            arm = bandit.select_arm()
+            pulled.append(arm[0])
+            bandit.update(arm[0], reward=0.5)
+
+        self.assertEqual(set(pulled), set([a[0] for a in MUTATION_STRATEGIES]))
+        self.assertEqual(bandit.total_pulls, len(MUTATION_STRATEGIES))
+
+        # Reward one arm heavily
+        favored = MUTATION_STRATEGIES[0][0]
+        bandit.update(favored, reward=10.0)
+        next_arm = bandit.select_arm()
+        self.assertEqual(next_arm[0], favored)
+
+    def test_all_5_conditions_execution(self):
+        conditions = ["single_metric", "static_cascade", "ucb1_bandit", "no_pruning", "full_adaptive"]
+        controller = EvolutionController(is_mock=True, model="openai/gpt-oss-120b")
+
+        for cond in conditions:
+            res = controller.run_generation(strategy=cond, task_id="he_055_fib")
+            self.assertEqual(res["strategy"], cond)
+            self.assertIn("fitness", res)
+            self.assertIn("cost_spent", res)
+
+            if cond == "single_metric":
+                self.assertEqual(res["active_evaluators"], ["mu_1_correctness"])
+                self.assertEqual(res["weights"]["mu_1_correctness"], 1.0)
+                self.assertEqual(res["weights"]["mu_2_latency"], 0.0)
+            elif cond in ["static_cascade", "ucb1_bandit"]:
+                for w in res["weights"].values():
+                    self.assertAlmostEqual(w, 1.0 / 6.0, places=3)
+
+    def test_csv_schema_compatibility_exact_32_columns(self):
+        expected_columns = [
+            "generation", "agent_id", "parent_id", "fitness", "cost_spent", "mutation_type",
+            "temperature", "max_retries", "active_evaluators_count", "mu_1_correctness",
+            "mu_2_latency", "mu_3_conciseness", "mu_4_reasoning", "mu_5_edge_cases", "mu_6_safety",
+            "strategy", "naive_cost_spent", "cumulative_adaptive_cost", "cumulative_naive_cost",
+            "task_id", "system_prompt", "top_p", "max_tokens", "delta_f", "cost_saved_this_gen",
+            "solution_preview", "weight_mu_1_correctness", "weight_mu_2_latency",
+            "weight_mu_3_conciseness", "weight_mu_4_reasoning", "weight_mu_5_edge_cases",
+            "weight_mu_6_safety",
+        ]
+        controller = EvolutionController(is_mock=True, model="openai/gpt-oss-120b")
+        controller.run_generation(strategy="full_adaptive")
+        df = controller.archive.to_detailed_dataframe()
+        for col in expected_columns:
+            self.assertIn(col, df.columns, f"Missing required column: {col}")
+        # Verify first 32 columns match exact expected order
+        self.assertEqual(list(df.columns[:len(expected_columns)]), expected_columns)
+
+    def test_harness_and_statistical_analysis(self):
+        import pandas as pd
+        from run_experiments import run_experiment_suite
+        from analyze_results import analyze_csv_results
+
+        test_csv = "test_mini_experiments.csv"
+        df = run_experiment_suite(
+            conditions=["single_metric", "full_adaptive"],
+            tasks=["he_055_fib"],
+            num_runs=2,
+            num_generations=2,
+            is_mock=True,
+            inter_call_delay=0.0,
+            output_csv=test_csv,
+        )
+        self.assertTrue(os.path.exists(test_csv))
+        self.assertTrue(len(df) > 0)
+
+        wilcoxon_df, conv_df = analyze_csv_results(test_csv)
+        self.assertFalse(wilcoxon_df.empty)
+        self.assertFalse(conv_df.empty)
+
+        # Cleanup
+        if os.path.exists(test_csv):
+            os.remove(test_csv)
+        if os.path.exists("statistical_analysis_summary.csv"):
+            os.remove("statistical_analysis_summary.csv")
+        if os.path.exists("task_condition_metrics.csv"):
+            os.remove("task_condition_metrics.csv")
 
 
 if __name__ == "__main__":

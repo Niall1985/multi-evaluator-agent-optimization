@@ -186,11 +186,21 @@ with st.sidebar:
     st.markdown("---")
     st.markdown("### Search & Penalty Knobs")
 
-    strategy_mode = st.radio(
-        "Evolution Strategy",
-        options=["adaptive", "baseline"],
-        format_func=lambda x: "Joint Adaptive (Gaps 1, 2, 3)" if x == "adaptive" else "Static Baseline (Uniform / Full)",
-        index=0 if ctrl.default_strategy == "adaptive" else 1,
+    strategy_mode = st.selectbox(
+        "Evolution Strategy Condition",
+        options=["full_adaptive", "no_pruning", "ucb1_bandit", "static_cascade", "single_metric"],
+        format_func=lambda x: {
+            "full_adaptive": "Condition 5: Full Joint Adaptive (Gaps 1, 2, 3)",
+            "no_pruning": "Condition 4: Adaptive Weights, No Pruning",
+            "ucb1_bandit": "Condition 3: UCB1 Bandit Mutations, Uniform Weights",
+            "static_cascade": "Condition 2: Static Cascade (Uniform Weights)",
+            "single_metric": "Condition 1: Single Metric (mu_1 Correctness Only)",
+        }.get(x, x),
+        index=0 if ctrl.default_strategy in ["full_adaptive", "adaptive"] else (
+            ["full_adaptive", "no_pruning", "ucb1_bandit", "static_cascade", "single_metric"].index(ctrl.default_strategy)
+            if ctrl.default_strategy in ["full_adaptive", "no_pruning", "ucb1_bandit", "static_cascade", "single_metric"]
+            else 0
+        ),
     )
     ctrl.default_strategy = strategy_mode
 
@@ -269,8 +279,9 @@ st.markdown("---")
 # ---------------------------------------------------------
 # Tabs Layout
 # ---------------------------------------------------------
-tab_panelist, tab1, tab2, tab3, tab4 = st.tabs([
-    "PANELIST PRESENTATION: Graphs & Results Table",
+tab_panelist, tab_inspector, tab1, tab2, tab3, tab4 = st.tabs([
+    "PRESENTATION: Graphs & Results Table",
+    "GENERATION INSPECTOR: Prompts & Solutions",
     "Tab 1: Live Evolution & Pareto Radar",
     "Tab 2: Gaussian Process & Adaptive Weights (Gap 2)",
     "Tab 3: Cost Awareness & Evaluator Pruning (Gaps 1 & 3)",
@@ -282,7 +293,7 @@ tab_panelist, tab1, tab2, tab3, tab4 = st.tabs([
 # TAB PANELIST: Graphs & Results Table (All-in-One Presentation)
 # ---------------------------------------------------------
 with tab_panelist:
-    st.markdown("### Executive Summary & Panelist Presentation Dashboard")
+    st.markdown("### Executive Summary & Presentation Dashboard")
     st.caption("Consolidated analytical results, Pareto trade-offs, Bayesian acquisition curves, evaluator pruning matrix, and complete tabular performance records.")
 
     # Top Row Graphs: Radar Profile & Pareto Frontier
@@ -428,6 +439,7 @@ with tab_panelist:
             st.info("Execute generations to populate Figure 4.")
 
     st.markdown("---")
+    st.markdown("---")
     st.markdown("#### Comprehensive Experimental Results Table")
     df_panelist_results = ctrl.archive.to_detailed_dataframe()
     if not df_panelist_results.empty:
@@ -437,7 +449,7 @@ with tab_panelist:
             st.caption("Complete table of parameters, harness knobs (temperature, retries, top_p), multi-metric evaluation scores, scalarized fitness, and costs.")
         with col_down2:
             st.download_button(
-                label="Download Results CSV for Panelists",
+                label="Download Results CSV",
                 data=df_panelist_results.to_csv(index=False).encode('utf-8'),
                 file_name="multi_objective_agent_optimization_results.csv",
                 mime="text/csv",
@@ -445,8 +457,117 @@ with tab_panelist:
                 type="primary",
             )
         st.dataframe(df_panelist_results, use_container_width=True)
+
+        with st.expander("Inspect Prompts and Solutions for Each Generation (Live Panelist View)", expanded=False):
+            agents_all = ctrl.archive.get_all_agents()
+            for ag in agents_all:
+                p_ag = ctrl.archive.agents.get(ag.parent_id) if ag.parent_id else None
+                st.markdown(f"##### Generation {ag.generation}: Agent `{ag.id}` (Parent: `{ag.parent_id or 'Root'}` | Fitness: `{ag.fitness:.4f}` | Cost: `${ag.cost_spent:.5f}`)")
+                c_p, c_c, c_s = st.columns(3)
+                with c_p:
+                    st.markdown(f"**Parent Prompt (`{p_ag.id if p_ag else 'Root'}`)**")
+                    st.code(p_ag.system_prompt if p_ag else "Initial Seed Archetype (No Parent)", language="text")
+                with c_c:
+                    st.markdown(f"**Mutated Child Prompt (`{ag.id}`)**")
+                    st.caption(f"Mutation: `{ag.mutation_type}`")
+                    st.code(ag.system_prompt, language="text")
+                with c_s:
+                    st.markdown(f"**Generated Solution Code (`{ag.task_id or 'Benchmark Task'}`)**")
+                    st.code(ag.last_solution if ag.last_solution else "# Solution executed during evaluation", language="python")
+                st.divider()
     else:
         st.info("No experimental records available. Run generations to populate.")
+
+
+# ---------------------------------------------------------
+# TAB INSPECTOR: Prompts, Lineage & Code Solutions
+# ---------------------------------------------------------
+with tab_inspector:
+    st.subheader("Generation-by-Generation Agent Lineage, Prompts & Solutions Explorer")
+    st.caption("Compare parent system prompts, mutated child system prompts, and synthesized Python code solutions across every evolutionary generation.")
+
+    all_agents_list = ctrl.archive.get_all_agents()
+    if not all_agents_list:
+        st.info("No generations have been executed yet. Click 'Run 1 Gen' or 'Run 5 Gen' in the sidebar.")
+    else:
+        # Generation Selector
+        gen_options = [
+            f"Generation {a.generation}: {a.id} (Parent: {a.parent_id or 'Root'}) — Fitness: {a.fitness:.4f}"
+            for a in all_agents_list
+        ]
+        selected_gen_idx = st.selectbox(
+            "Select Generation / Agent Candidate to Inspect",
+            options=range(len(gen_options)),
+            format_func=lambda i: gen_options[i],
+            index=len(gen_options) - 1,
+        )
+        selected_agent = all_agents_list[selected_gen_idx]
+        parent_agent = ctrl.archive.agents.get(selected_agent.parent_id) if selected_agent.parent_id else None
+
+        # Summary KPIs for selected generation
+        st.markdown(f"#### Selected Candidate: `{selected_agent.id}` (Generation {selected_agent.generation})")
+        kpi_g1, kpi_g2, kpi_g3, kpi_g4 = st.columns(4)
+        with kpi_g1:
+            st.metric("Fitness Score F", f"{selected_agent.fitness:.4f}")
+        with kpi_g2:
+            st.metric("Cost Spent", f"${selected_agent.cost_spent:.5f}")
+        with kpi_g3:
+            st.metric("Active Evaluators", f"{len(selected_agent.active_evaluators)} / 6")
+        with kpi_g4:
+            st.metric("Mutation Strategy", f"{selected_agent.mutation_type}")
+
+        # 3-Column Comparative View
+        col_view1, col_view2, col_view3 = st.columns([1, 1, 1])
+
+        with col_view1:
+            st.markdown("##### 1. Parent Agent System Prompt")
+            if parent_agent:
+                st.caption(f"**Parent ID:** `{parent_agent.id}` (Gen {parent_agent.generation})")
+                st.caption(f"**Parent Fitness:** {parent_agent.fitness:.4f} | **Cost:** ${parent_agent.cost_spent:.5f}")
+                st.caption(f"**Parent Knobs:** Temp={parent_agent.harness_knobs.temperature:.2f}, Retries={parent_agent.harness_knobs.max_retries}, Top_p={parent_agent.harness_knobs.top_p:.2f}")
+                st.code(parent_agent.system_prompt, language="text")
+            else:
+                st.caption("**Root Baseline Agent (No Parent)**")
+                st.info("This is the Generation 0 seed agent initialized from the selected archetype.")
+                st.code(selected_agent.system_prompt, language="text")
+
+        with col_view2:
+            st.markdown("##### 2. Mutated Child System Prompt")
+            st.caption(f"**Child ID:** `{selected_agent.id}` (Gen {selected_agent.generation})")
+            st.caption(f"**Mutation Operator:** `{selected_agent.mutation_type}`")
+            st.caption(f"**Child Knobs:** Temp={selected_agent.harness_knobs.temperature:.2f}, Retries={selected_agent.harness_knobs.max_retries}, Top_p={selected_agent.harness_knobs.top_p:.2f}")
+            st.code(selected_agent.system_prompt, language="text")
+
+        with col_view3:
+            st.markdown("##### 3. Synthesized Python Solution Code")
+            st.caption(f"**Target Task:** `{selected_agent.task_id or 'Benchmark Task'}`")
+            if selected_agent.metrics:
+                m_str = " | ".join([f"{k}: {v:.2f}" for k, v in selected_agent.metrics.items()])
+                st.caption(f"**Scores:** {m_str}")
+            if selected_agent.last_solution:
+                st.code(selected_agent.last_solution, language="python")
+            else:
+                st.info("No solution cached for this agent.")
+
+        # Master Table of all Generations
+        st.markdown("---")
+        st.markdown("#### Master Evolution History: Prompts & Solutions")
+        table_rows = []
+        for a in all_agents_list:
+            p_a = ctrl.archive.agents.get(a.parent_id) if a.parent_id else None
+            table_rows.append({
+                "Gen": a.generation,
+                "Agent ID": a.id,
+                "Parent ID": a.parent_id or "Root",
+                "Mutation": a.mutation_type,
+                "Fitness": round(a.fitness, 4),
+                "Cost ($)": round(a.cost_spent, 5),
+                "Task": a.task_id or "Benchmark",
+                "Parent Prompt Preview": (p_a.system_prompt[:50] + "...") if p_a else "Root (Initial Seed)",
+                "Child Prompt Preview": (a.system_prompt[:50] + "..."),
+                "Solution Preview": (a.last_solution[:60] + "...") if a.last_solution else "N/A",
+            })
+        st.dataframe(pd.DataFrame(table_rows), use_container_width=True)
 
 
 # ---------------------------------------------------------
@@ -746,17 +867,24 @@ with tab4:
         child_agent = agents_dict[selected_agent_id]
         parent_agent = agents_dict.get(child_agent.parent_id)
 
-        col_p1, col_p2 = st.columns(2)
+        col_p1, col_p2, col_p3 = st.columns(3)
         with col_p1:
             st.markdown(f"**Parent Agent (`{parent_agent.id if parent_agent else 'Root'}`)**")
             if parent_agent:
                 st.code(parent_agent.system_prompt, language="text")
-                st.caption(f"Knobs: Temp={parent_agent.harness_knobs.temperature}, Retries={parent_agent.harness_knobs.max_retries}, Top_p={parent_agent.harness_knobs.top_p}")
+                st.caption(f"Knobs: Temp={parent_agent.harness_knobs.temperature:.2f}, Retries={parent_agent.harness_knobs.max_retries}, Top_p={parent_agent.harness_knobs.top_p:.2f}")
                 st.caption(f"Fitness: {parent_agent.fitness:.4f} | Cost: ${parent_agent.cost_spent:.5f}")
         with col_p2:
-            st.markdown(f"**Child Agent (`{child_agent.id}`)** - Mutation: `{child_agent.mutation_type}`")
+            st.markdown(f"**Mutated Child Agent (`{child_agent.id}`)**")
+            st.caption(f"Mutation: `{child_agent.mutation_type}`")
             st.code(child_agent.system_prompt, language="text")
-            st.caption(f"Knobs: Temp={child_agent.harness_knobs.temperature}, Retries={child_agent.harness_knobs.max_retries}, Top_p={child_agent.harness_knobs.top_p}")
+            st.caption(f"Knobs: Temp={child_agent.harness_knobs.temperature:.2f}, Retries={child_agent.harness_knobs.max_retries}, Top_p={child_agent.harness_knobs.top_p:.2f}")
             st.caption(f"Fitness: {child_agent.fitness:.4f} | Cost: ${child_agent.cost_spent:.5f}")
+        with col_p3:
+            st.markdown(f"**Generated Solution Code (`{child_agent.task_id or 'Benchmark Task'}`)**")
+            if child_agent.metrics:
+                m_str = " | ".join([f"{k}: {v:.2f}" for k, v in child_agent.metrics.items()])
+                st.caption(f"Scores: {m_str}")
+            st.code(child_agent.last_solution if child_agent.last_solution else "# Solution executed during evaluation", language="python")
     else:
-        st.info("Evolve at least 1 child generation to inspect parent-child prompt diffs.")
+        st.info("Evolve at least 1 child generation to inspect parent-child prompt diffs and generated solutions.")

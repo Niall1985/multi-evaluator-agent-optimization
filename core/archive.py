@@ -117,9 +117,20 @@ class PopulationArchive:
         return pd.DataFrame(rows)
 
     def to_detailed_dataframe(self) -> pd.DataFrame:
-        """Exports complete parameters, evaluations, weights, and costs into a comprehensive DataFrame."""
+        """Exports complete parameters, evaluations, weights, and costs into a comprehensive DataFrame matching exact schema."""
         if not self.generation_records:
             return self.to_dataframe()
+
+        exact_columns = [
+            "generation", "agent_id", "parent_id", "fitness", "cost_spent", "mutation_type",
+            "temperature", "max_retries", "active_evaluators_count", "mu_1_correctness",
+            "mu_2_latency", "mu_3_conciseness", "mu_4_reasoning", "mu_5_edge_cases", "mu_6_safety",
+            "strategy", "naive_cost_spent", "cumulative_adaptive_cost", "cumulative_naive_cost",
+            "task_id", "system_prompt", "top_p", "max_tokens", "delta_f", "cost_saved_this_gen",
+            "solution_preview", "weight_mu_1_correctness", "weight_mu_2_latency",
+            "weight_mu_3_conciseness", "weight_mu_4_reasoning", "weight_mu_5_edge_cases",
+            "weight_mu_6_safety",
+        ]
 
         rows = []
         for rec in self.generation_records:
@@ -134,7 +145,7 @@ class PopulationArchive:
             if "active_evaluators" in row and isinstance(row["active_evaluators"], list):
                 row["active_evaluators"] = ", ".join(row["active_evaluators"])
 
-            # Include full system prompt if agent exists
+            # Include full system prompt and knobs if agent exists
             agent_id = row.get("agent_id")
             if agent_id and agent_id in self.agents:
                 agent = self.agents[agent_id]
@@ -142,9 +153,19 @@ class PopulationArchive:
                 row["top_p"] = agent.harness_knobs.top_p
                 row["max_tokens"] = agent.harness_knobs.max_tokens
 
-            rows.append(row)
+            # Ensure all exact columns exist in row
+            ordered_row = {col: row.get(col, None) for col in exact_columns}
+            # Append any additional non-standard metadata keys at end if any
+            for k, v in row.items():
+                if k not in ordered_row:
+                    ordered_row[k] = v
 
-        return pd.DataFrame(rows)
+            rows.append(ordered_row)
+
+        df = pd.DataFrame(rows)
+        # Reorder columns to place exact_columns first
+        ordered_cols = [c for c in exact_columns if c in df.columns] + [c for c in df.columns if c not in exact_columns]
+        return df[ordered_cols]
 
     def export_to_csv(self, filepath: str = "optimization_results.csv") -> str:
         """Saves all optimization metrics, evaluation results, and parameters to a CSV file."""

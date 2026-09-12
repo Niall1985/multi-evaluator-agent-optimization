@@ -32,14 +32,20 @@ class GroqLLMClient:
         api_key: Optional[str] = None,
         model: str = "openai/gpt-oss-120b",
         inter_call_delay: float = 1.5,
+        is_mock: Optional[bool] = None,
     ):
-        self.api_key = api_key or os.getenv("GROQ_API_KEY", "")
+        if is_mock is not None:
+            self.is_mock = is_mock
+            self.api_key = api_key or ""
+        else:
+            self.api_key = api_key if api_key is not None else os.getenv("GROQ_API_KEY", "")
+            self.is_mock = False
+
         self.model = model
         self.inter_call_delay = inter_call_delay
         self.client = None
-        self.is_mock = False
 
-        if GROQ_AVAILABLE and self.api_key and self.api_key.strip():
+        if not self.is_mock and GROQ_AVAILABLE and self.api_key and self.api_key.strip():
             try:
                 self.client = Groq(api_key=self.api_key.strip())
             except Exception as e:
@@ -153,47 +159,8 @@ class GroqLLMClient:
                     "defensive input validation, and optimal asymptotic complexity."
                 )
 
-        # 3. Check for Benchmark Task Execution
-        if "fibonacci" in lower_user or "fibonacci" in lower_sys:
-            return (
-                "```python\n"
-                "def solve(n: int) -> int:\n"
-                "    if n < 0:\n"
-                "        raise ValueError('n must be non-negative')\n"
-                "    if n <= 1:\n"
-                "        return n\n"
-                "    a, b = 0, 1\n"
-                "    for _ in range(2, n + 1):\n"
-                "        a, b = b, a + b\n"
-                "    return b\n"
-                "```"
-            )
-        elif "palindrome" in lower_user or "palindrome" in lower_sys:
-            return (
-                "```python\n"
-                "def solve(s: str) -> bool:\n"
-                "    filtered = [c.lower() for c in s if c.isalnum()]\n"
-                "    return filtered == filtered[::-1]\n"
-                "```"
-            )
-        elif "interval" in lower_user or "merge" in lower_user:
-            return (
-                "```python\n"
-                "def solve(intervals: list) -> list:\n"
-                "    if not intervals:\n"
-                "        return []\n"
-                "    intervals.sort(key=lambda x: x[0])\n"
-                "    merged = [intervals[0]]\n"
-                "    for current in intervals[1:]:\n"
-                "        prev = merged[-1]\n"
-                "        if current[0] <= prev[1]:\n"
-                "            merged[-1] = [prev[0], max(prev[1], current[1])]\n"
-                "        else:\n"
-                "            merged.append(current)\n"
-                "    return merged\n"
-                "```"
-            )
-        elif "parenthes" in lower_user or "bracket" in lower_user:
+        # 3. Check for Benchmark Task Execution (Specific matches first)
+        if "parenthes" in lower_user or "bracket" in lower_user or "task_valid_parentheses" in lower_user:
             return (
                 "```python\n"
                 "def solve(s: str) -> bool:\n"
@@ -208,7 +175,52 @@ class GroqLLMClient:
                 "    return len(stack) == 0\n"
                 "```"
             )
-        elif "stock" in lower_user or "buy" in lower_user or "sell" in lower_user:
+        elif "he_000_has_close_elements" in lower_user or "close_elements" in lower_user or "has_close_elements" in lower_user:
+            return (
+                "```python\n"
+                "def solve(numbers: list, threshold: float) -> bool:\n"
+                "    for i in range(len(numbers)):\n"
+                "        for j in range(i + 1, len(numbers)):\n"
+                "            if abs(numbers[i] - numbers[j]) < threshold:\n"
+                "                return True\n"
+                "    return False\n"
+                "```"
+            )
+        elif "he_003_below_zero" in lower_user or "below_zero" in lower_user or "bank account" in lower_user:
+            return (
+                "```python\n"
+                "def solve(operations: list) -> bool:\n"
+                "    balance = 0\n"
+                "    for op in operations:\n"
+                "        balance += op\n"
+                "        if balance < 0:\n"
+                "            return True\n"
+                "    return False\n"
+                "```"
+            )
+        elif "he_055_fib" in lower_user or "fibonacci" in lower_user or "fib" in lower_user or "fibonacci" in lower_sys:
+            return (
+                "```python\n"
+                "def solve(n: int) -> int:\n"
+                "    if n < 0:\n"
+                "        raise ValueError('n must be non-negative')\n"
+                "    if n <= 1:\n"
+                "        return n\n"
+                "    a, b = 0, 1\n"
+                "    for _ in range(2, n + 1):\n"
+                "        a, b = b, a + b\n"
+                "    return b\n"
+                "```"
+            )
+        elif "mbpp_006_differ_bits" in lower_user or "differ_bits" in lower_user or "differ at one" in lower_user or "differ" in lower_user:
+            return (
+                "```python\n"
+                "def solve(a: int, b: int) -> bool:\n"
+                "    val = a ^ b\n"
+                "    return val > 0 and (val & (val - 1)) == 0\n"
+                "```"
+            )
+        elif "mbpp_274_stock_exchange" in lower_user or "stock" in lower_user or "buy & sell" in lower_user:
             return (
                 "```python\n"
                 "def solve(prices: list) -> int:\n"
@@ -224,7 +236,7 @@ class GroqLLMClient:
                 "    return max_profit\n"
                 "```"
             )
-        elif "two_sum" in lower_user or "two sum" in lower_user or "target" in lower_user:
+        elif "task_two_sum" in lower_user or "two_sum" in lower_user or "two sum" in lower_user or "target" in lower_user:
             return (
                 "```python\n"
                 "def solve(nums: list, target: int) -> list:\n"

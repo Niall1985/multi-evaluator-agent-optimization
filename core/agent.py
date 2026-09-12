@@ -112,6 +112,8 @@ class Agent:
     mutation_type: str = "initial"
     mutation_description: str = "Seed baseline agent"
     lineage_path: List[str] = field(default_factory=list)
+    last_solution: str = ""
+    task_id: Optional[str] = None
     created_at: float = field(default_factory=time.time)
 
     def __post_init__(self):
@@ -133,6 +135,8 @@ class Agent:
             "mutation_type": self.mutation_type,
             "mutation_description": self.mutation_description,
             "lineage_path": self.lineage_path,
+            "last_solution": self.last_solution,
+            "task_id": self.task_id,
             "created_at": self.created_at,
         }
 
@@ -156,5 +160,7 @@ class Agent:
             mutation_type=mutation_type,
             mutation_description=description,
             lineage_path=self.lineage_path + [new_id],
+            last_solution="",
+            task_id=self.task_id,
         )
         return child
