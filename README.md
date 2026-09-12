@@ -1,14 +1,5 @@
 # Multi-Objective Agent Optimization through Evaluation
 
-**Course & Project:** BCSE497J – Project 1  
-**Team Members:**  
-- Subhrojyoti Sen (23BCE1259)  
-- Kumar Shreyash (23BCE1882)  
-- Niall Francis Ajeet Dcunha (23BCE1985)  
-**Guide:** Dr. Sreeja P S  
-
----
-
 ## Project Overview & Addressed Gaps
 
 This project implements a complete, from-scratch framework for **Multi-Objective Agent Optimization** across 3 foundational research gaps:
