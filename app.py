@@ -1,0 +1,575 @@
+import os
+import streamlit as st
+import pandas as pd
+import numpy as np
+import plotly.graph_objects as go
+import plotly.express as px
+from plotly.subplots import make_subplots
+
+from controller import EvolutionController
+from tasks.benchmark_tasks import BENCHMARK_TASKS
+
+# ---------------------------------------------------------
+# Environment Configuration
+# ---------------------------------------------------------
+def _load_env_file(filepath: str = ".env"):
+    if os.path.exists(filepath):
+        try:
+            with open(filepath, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith("#") and "=" in line:
+                        k, v = line.split("=", 1)
+                        k = k.strip()
+                        v = v.strip().strip("'\"")
+                        if k and k not in os.environ:
+                            os.environ[k] = v
+        except Exception:
+            pass
+
+_load_env_file()
+
+# ---------------------------------------------------------
+# Page Configuration
+# ---------------------------------------------------------
+st.set_page_config(
+    page_title="Multi-Objective Agent Optimization (BCSE497J)",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+
+# Custom CSS for polished academic dashboard look
+st.markdown("""
+<style>
+    .main-header {
+        font-size: 2.2rem;
+        font-weight: 700;
+        color: #1E3A8A;
+        margin-bottom: 0.2rem;
+    }
+    .sub-header {
+        font-size: 1.05rem;
+        color: #4B5563;
+        margin-bottom: 1.5rem;
+    }
+    .metric-box {
+        background-color: #F8FAFC;
+        border: 1px solid #E2E8F0;
+        border-radius: 8px;
+        padding: 12px 16px;
+    }
+    .badge-core {
+        background-color: #DBEAFE;
+        color: #1E40AF;
+        padding: 2px 8px;
+        border-radius: 4px;
+        font-weight: 600;
+        font-size: 0.8rem;
+    }
+    .badge-deep {
+        background-color: #FEF3C7;
+        color: #92400E;
+        padding: 2px 8px;
+        border-radius: 4px;
+        font-weight: 600;
+        font-size: 0.8rem;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+
+# ---------------------------------------------------------
+# Session State Initialization
+# ---------------------------------------------------------
+if "controller" not in st.session_state:
+    st.session_state.controller = EvolutionController(
+        api_key=os.getenv("GROQ_API_KEY", ""),
+        model="openai/gpt-oss-120b",
+        lambda_penalty=0.5,
+        default_strategy="adaptive",
+    )
+if "generation_count" not in st.session_state:
+    st.session_state.generation_count = 0
+
+
+ctrl: EvolutionController = st.session_state.controller
+
+# ---------------------------------------------------------
+# Sidebar Controls
+# ---------------------------------------------------------
+with st.sidebar:
+    st.markdown("### Optimization Configuration")
+    
+    current_key = ctrl.api_key or os.getenv("GROQ_API_KEY", "")
+    api_key_input = st.text_input(
+        "Groq API Key (Optional / Fallback to Mock)",
+        value=current_key,
+        type="password",
+        help="Provide your Groq API Key to test live LLM mutations. If blank, deterministic simulation mock is used.",
+    )
+    if api_key_input != ctrl.api_key:
+        ctrl.api_key = api_key_input
+        ctrl.llm_client.api_key = api_key_input
+        if api_key_input.strip():
+            ctrl.llm_client.is_mock = False
+        else:
+            ctrl.llm_client.is_mock = True
+
+    model_choice = st.selectbox(
+        "Groq Primary Model",
+        options=[
+            "openai/gpt-oss-120b",
+            "qwen/qwen-2.5-coder-32b",
+            "deepseek-r1-distill-llama-70b",
+            "llama-3.1-8b-instant",
+        ],
+        index=0,
+    )
+    if model_choice != ctrl.model:
+        ctrl.model = model_choice
+        ctrl.llm_client.model = model_choice
+
+    st.markdown("---")
+    st.markdown("### Search & Penalty Knobs")
+
+    strategy_mode = st.radio(
+        "Evolution Strategy",
+        options=["adaptive", "baseline"],
+        format_func=lambda x: "Joint Adaptive (Gaps 1, 2, 3)" if x == "adaptive" else "Static Baseline (Uniform / Full)",
+        index=0 if ctrl.default_strategy == "adaptive" else 1,
+    )
+    ctrl.default_strategy = strategy_mode
+
+    lambda_penalty = st.slider(
+        "Cost Penalty Lambda (lambda)",
+        min_value=0.0,
+        max_value=2.0,
+        value=ctrl.lambda_penalty,
+        step=0.05,
+        help="Higher lambda heavily penalizes invoking expensive Deep Tier evaluators.",
+    )
+    ctrl.lambda_penalty = lambda_penalty
+
+    st.markdown("---")
+    st.markdown("### Evaluator Suite Tiers")
+    c_sub1, c_sub2 = st.columns(2)
+    with c_sub1:
+        st.markdown("<span class='badge-core'>Subset 1: Core Tier</span>", unsafe_allow_html=True)
+        st.caption("• mu_1 Correctness ($0.001)\n• mu_2 Latency ($0.000)\n• mu_3 Conciseness ($0.000)")
+    with c_sub2:
+        st.markdown("<span class='badge-deep'>Subset 2: Deep Tier</span>", unsafe_allow_html=True)
+        st.caption("• mu_4 Reasoning ($0.015)\n• mu_5 Edge Cases ($0.005)\n• mu_6 Safety ($0.015)")
+
+    st.markdown("---")
+    st.markdown("### Optimization Actions")
+    col_a1, col_a2 = st.columns(2)
+    with col_a1:
+        if st.button("Run 1 Gen", use_container_width=True, type="primary"):
+            with st.spinner("Running 1 Generation..."):
+                ctrl.run_generation(strategy=strategy_mode)
+                st.session_state.generation_count = ctrl.current_generation
+                st.rerun()
+
+    with col_a2:
+        if st.button("Run 10 Gen", use_container_width=True):
+            with st.spinner("Running 10 Generations..."):
+                ctrl.run_n_generations(10, strategy=strategy_mode)
+                st.session_state.generation_count = ctrl.current_generation
+                st.rerun()
+
+    if st.button("Reset Evolution State", use_container_width=True):
+        ctrl.reset()
+        st.session_state.generation_count = 0
+        st.rerun()
+
+
+# ---------------------------------------------------------
+# Main Header & Team Info
+# ---------------------------------------------------------
+st.markdown("<div class='main-header'>Multi-Objective Agent Optimization Dashboard</div>", unsafe_allow_html=True)
+st.markdown(
+    "<div class='sub-header'>"
+    "<b>Course:</b> BCSE497J – Project 1 | "
+    "<b>Team:</b> Subhrojyoti Sen (23BCE1259), Kumar Shreyash (23BCE1882), Niall Francis Ajeet Dcunha (23BCE1985) | "
+    "<b>Guide:</b> Dr. Sreeja P S"
+    "</div>",
+    unsafe_allow_html=True,
+)
+
+# Telemetry Summary KPIs
+telemetry = ctrl.get_telemetry_summary()
+kpi1, kpi2, kpi3, kpi4, kpi5 = st.columns(5)
+with kpi1:
+    st.metric("Generations Run", f"{telemetry['total_generations']}")
+with kpi2:
+    st.metric("Best Fitness", f"{telemetry['best_fitness']:.4f}")
+with kpi3:
+    st.metric("Total Spent", f"${telemetry['cumulative_cost_spent']:.5f}")
+with kpi4:
+    st.metric("Naive Cost", f"${telemetry['cumulative_naive_cost']:.5f}")
+with kpi5:
+    st.metric("Cost Savings", f"${telemetry['cost_saved_usd']:.5f}", f"{telemetry['cost_saved_pct']:.1f}%")
+
+st.markdown("---")
+
+# ---------------------------------------------------------
+# Tabs Layout
+# ---------------------------------------------------------
+tab1, tab2, tab3, tab4 = st.tabs([
+    "Tab 1: Live Evolution & Pareto Radar",
+    "Tab 2: Gaussian Process & Adaptive Weights (Gap 2)",
+    "Tab 3: Cost Awareness & Evaluator Pruning (Gaps 1 & 3)",
+    "Tab 4: Population Archive & Data Export (CSV)",
+])
+
+# ---------------------------------------------------------
+# TAB 1: Live Evolution & Pareto Radar
+# ---------------------------------------------------------
+with tab1:
+    st.subheader("Pareto Optimization & Multi-Objective Profile")
+    col_t1_left, col_t1_right = st.columns([1, 1])
+
+    best_agent = ctrl.archive.get_best_agent()
+
+    with col_t1_left:
+        st.markdown("#### Best Agent Multi-Objective Radar Profile")
+        if best_agent and best_agent.metrics:
+            categories = list(best_agent.metrics.keys())
+            values = [best_agent.metrics[k] for k in categories]
+            # Close the radar polygon
+            categories.append(categories[0])
+            values.append(values[0])
+
+            fig_radar = go.Figure()
+            fig_radar.add_trace(go.Scatterpolar(
+                r=values,
+                theta=categories,
+                fill='toself',
+                name=f"Best ({best_agent.id})",
+                line_color='#2563EB',
+                fillcolor='rgba(37, 99, 235, 0.25)',
+            ))
+            fig_radar.update_layout(
+                polar=dict(
+                    radialaxis=dict(visible=True, range=[0, 1.0])
+                ),
+                showlegend=True,
+                height=380,
+                margin=dict(l=40, r=40, t=30, b=30),
+            )
+            st.plotly_chart(fig_radar, use_container_width=True)
+        else:
+            st.info("Run at least 1 generation to populate radar profile.")
+
+    with col_t1_right:
+        st.markdown("#### Fitness Trajectory over Generations")
+        records = ctrl.archive.generation_records
+        if records:
+            df_records = pd.DataFrame(records)
+            fig_traj = go.Figure()
+            fig_traj.add_trace(go.Scatter(
+                x=df_records["generation"],
+                y=df_records["fitness"],
+                mode='lines+markers',
+                name='Agent Fitness',
+                line=dict(color='#10B981', width=2),
+                marker=dict(size=7),
+            ))
+            # Cumulative best
+            df_records["cum_best"] = df_records["fitness"].cummax()
+            fig_traj.add_trace(go.Scatter(
+                x=df_records["generation"],
+                y=df_records["cum_best"],
+                mode='lines',
+                name='Incumbent Best',
+                line=dict(color='#2563EB', width=2, dash='dash'),
+            ))
+            fig_traj.update_layout(
+                xaxis_title="Generation",
+                yaxis_title="Scalarized Fitness F(Phi, x_E, w)",
+                height=380,
+                margin=dict(l=40, r=40, t=30, b=30),
+                legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01),
+            )
+            st.plotly_chart(fig_traj, use_container_width=True)
+        else:
+            st.info("No generation records yet.")
+
+    # 2D/3D Pareto Scatter
+    st.markdown("#### Pareto Frontier: Correctness vs Latency vs Cost")
+    agents_all = ctrl.archive.get_all_agents()
+    pareto_agents = ctrl.archive.get_pareto_front()
+    pareto_ids = {a.id for a in pareto_agents}
+
+    if agents_all:
+        scatter_data = []
+        for a in agents_all:
+            scatter_data.append({
+                "Agent ID": a.id,
+                "Generation": a.generation,
+                "Correctness (mu_1)": a.metrics.get("mu_1_correctness", 0.0),
+                "Latency Score (mu_2)": a.metrics.get("mu_2_latency", 0.0),
+                "Reasoning (mu_4)": a.metrics.get("mu_4_reasoning", 0.0),
+                "Cost ($)": a.cost_spent,
+                "Fitness": a.fitness,
+                "Is Pareto": "Pareto Optimal" if a.id in pareto_ids else "Dominated",
+            })
+        df_scatter = pd.DataFrame(scatter_data)
+
+        fig_scatter = px.scatter(
+            df_scatter,
+            x="Correctness (mu_1)",
+            y="Latency Score (mu_2)",
+            size="Fitness",
+            color="Is Pareto",
+            hover_data=["Agent ID", "Generation", "Cost ($)", "Reasoning (mu_4)"],
+            color_discrete_map={"Pareto Optimal": "#EF4444", "Dominated": "#3B82F6"},
+            title="Non-Dominated Pareto Candidates across Generations",
+        )
+        fig_scatter.update_layout(height=400, margin=dict(l=40, r=40, t=40, b=30))
+        st.plotly_chart(fig_scatter, use_container_width=True)
+
+
+# ---------------------------------------------------------
+# TAB 2: Gaussian Process & Adaptive Weights (Gap 2)
+# ---------------------------------------------------------
+with tab2:
+    st.subheader("Gap 2: Bayesian Gaussian Process Weight Optimization & Expected Improvement")
+    st.markdown(
+        "The continuous weight vector w = [w_1, ..., w_k] with sum(w_j) = 1 is actively updated via "
+        "Gaussian Process Regression with a Matern kernel. The acquisition function **Expected Improvement (EI)** "
+        "proposes optimal weights that maximize relative improvement Delta_F."
+    )
+
+    c_gp_ctrl, c_gp_view = st.columns([1, 2])
+    with c_gp_ctrl:
+        st.markdown("#### 1D Slice Metric Target")
+        target_metric = st.selectbox(
+            "Select Metric to Inspect 1D GP Slice",
+            options=ctrl.metric_names,
+            index=0,
+        )
+        target_idx = ctrl.metric_names.index(target_metric)
+        st.markdown(f"**Selected Dimension:** `{target_metric}` (index {target_idx})")
+        st.caption("A 1D slice varies the weight of the selected metric from 0 to 1 while distributing the remainder uniformly.")
+
+    with c_gp_view:
+        w_grid, mu, sigma, ei, sampled_x, sampled_y = ctrl.bayesian_optimizer.get_1d_gp_slice(target_idx=target_idx)
+
+        fig_gp = make_subplots(
+            rows=2, cols=1,
+            shared_xaxes=True,
+            vertical_spacing=0.12,
+            subplot_titles=(
+                f"Gaussian Process Mean & 95% Confidence Interval for w[{target_metric}]",
+                "Expected Improvement (EI) Acquisition Function",
+            ),
+        )
+
+        upper_bound = mu + 1.96 * sigma
+        lower_bound = mu - 1.96 * sigma
+
+        fig_gp.add_trace(
+            go.Scatter(
+                x=np.concatenate([w_grid, w_grid[::-1]]),
+                y=np.concatenate([upper_bound, lower_bound[::-1]]),
+                fill='toself',
+                fillcolor='rgba(37, 99, 235, 0.15)',
+                line=dict(color='rgba(255,255,255,0)'),
+                hoverinfo="skip",
+                name='95% Confidence Interval (+-1.96 sigma)',
+            ),
+            row=1, col=1,
+        )
+
+        fig_gp.add_trace(
+            go.Scatter(
+                x=w_grid,
+                y=mu,
+                mode='lines',
+                line=dict(color='#2563EB', width=2.5),
+                name='GP Mean mu(w)',
+            ),
+            row=1, col=1,
+        )
+
+        if len(sampled_x) > 0:
+            fig_gp.add_trace(
+                go.Scatter(
+                    x=sampled_x,
+                    y=sampled_y,
+                    mode='markers',
+                    marker=dict(color='#DC2626', size=8, symbol='circle'),
+                    name='Observed Trials (w_i, Delta_F_i)',
+                ),
+                row=1, col=1,
+            )
+
+        fig_gp.add_trace(
+            go.Scatter(
+                x=w_grid,
+                y=ei,
+                mode='lines',
+                line=dict(color='#D97706', width=2),
+                fill='tozeroy',
+                fillcolor='rgba(217, 119, 6, 0.2)',
+                name='Expected Improvement EI(w)',
+            ),
+            row=2, col=1,
+        )
+
+        fig_gp.update_xaxes(title_text=f"Weight w_{target_idx} [{target_metric}]", row=2, col=1)
+        fig_gp.update_yaxes(title_text="Predicted Delta_F", row=1, col=1)
+        fig_gp.update_yaxes(title_text="EI Value", row=2, col=1)
+        fig_gp.update_layout(height=480, margin=dict(l=40, r=40, t=40, b=30))
+        st.plotly_chart(fig_gp, use_container_width=True)
+
+    st.markdown("#### Dynamic Weight Evolution over Generations")
+    df_weights = ctrl.bayesian_optimizer.get_weights_history_df()
+    if not df_weights.empty:
+        fig_area = go.Figure()
+        colors = ['#3B82F6', '#10B981', '#F59E0B', '#8B5CF6', '#EC4899', '#6366F1']
+        for i, col_name in enumerate(ctrl.metric_names):
+            if col_name in df_weights.columns:
+                fig_area.add_trace(go.Scatter(
+                    x=df_weights["Generation"],
+                    y=df_weights[col_name],
+                    mode='lines',
+                    stackgroup='one',
+                    name=col_name,
+                    line=dict(width=0.5, color=colors[i % len(colors)]),
+                ))
+        fig_area.update_layout(
+            xaxis_title="Generation",
+            yaxis_title="Weight Proportion (Sum = 1.0)",
+            height=340,
+            margin=dict(l=40, r=40, t=30, b=30),
+        )
+        st.plotly_chart(fig_area, use_container_width=True)
+    else:
+        st.info("Run generations to view dynamic weight adaptation trajectories.")
+
+
+# ---------------------------------------------------------
+# TAB 3: Cost Awareness & Evaluator Pruning (Gaps 1 & 3)
+# ---------------------------------------------------------
+with tab3:
+    st.subheader("Gaps 1 & 3: Cost-Penalized Search & Evaluator Pruning Telemetry")
+    
+    col_c1, col_c2 = st.columns([1, 1])
+
+    with col_c1:
+        st.markdown("#### Cumulative Cost Comparison")
+        df_rec = pd.DataFrame(ctrl.archive.generation_records)
+        if not df_rec.empty and "cumulative_adaptive_cost" in df_rec.columns:
+            fig_cost = go.Figure()
+            fig_cost.add_trace(go.Scatter(
+                x=df_rec["generation"],
+                y=df_rec["cumulative_naive_cost"],
+                mode='lines+markers',
+                name='Naive Full Evaluation Suite (All 6 Evaluators)',
+                line=dict(color='#DC2626', width=2, dash='dash'),
+            ))
+            fig_cost.add_trace(go.Scatter(
+                x=df_rec["generation"],
+                y=df_rec["cumulative_adaptive_cost"],
+                mode='lines+markers',
+                name='Our Selective Adaptive Suite (Gaps 1 & 3)',
+                line=dict(color='#10B981', width=3),
+            ))
+            fig_cost.update_layout(
+                xaxis_title="Generation",
+                yaxis_title="Cumulative Cost (USD $)",
+                height=360,
+                margin=dict(l=40, r=40, t=30, b=30),
+                legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01),
+            )
+            st.plotly_chart(fig_cost, use_container_width=True)
+        else:
+            st.info("No cost history available yet.")
+
+    with col_c2:
+        st.markdown("#### Selective Evaluator Activation Heatmap")
+        agents = ctrl.archive.get_all_agents()
+        if agents:
+            heatmap_data = []
+            gen_labels = []
+            for a in agents:
+                gen_labels.append(f"Gen {a.generation} ({a.id[:8]})")
+                row_flags = [1 if m in a.active_evaluators else 0 for m in ctrl.metric_names]
+                heatmap_data.append(row_flags)
+
+            fig_heat = go.Figure(data=go.Heatmap(
+                z=np.array(heatmap_data).T,
+                x=gen_labels,
+                y=ctrl.metric_names,
+                colorscale=[[0, '#F1F5F9'], [1, '#10B981']],
+                showscale=False,
+            ))
+            fig_heat.update_layout(
+                xaxis_title="Agent Candidates per Generation",
+                yaxis_title="Evaluator Suite",
+                height=360,
+                margin=dict(l=40, r=40, t=30, b=30),
+            )
+            st.plotly_chart(fig_heat, use_container_width=True)
+        else:
+            st.info("No evaluator activation data yet.")
+
+
+# ---------------------------------------------------------
+# TAB 4: Population Archive & Data Export (CSV)
+# ---------------------------------------------------------
+with tab4:
+    st.subheader("Population Archive & Complete CSV Results")
+
+    col_exp1, col_exp2 = st.columns([3, 1])
+    with col_exp1:
+        st.markdown("#### Searchable Population Archive")
+    with col_exp2:
+        df_detailed = ctrl.archive.to_detailed_dataframe()
+        csv_data = df_detailed.to_csv(index=False).encode('utf-8')
+        st.download_button(
+            label="Download Complete Results (CSV)",
+            data=csv_data,
+            file_name="optimization_results.csv",
+            mime="text/csv",
+            use_container_width=True,
+            type="primary",
+        )
+
+    st.caption("All parameters, harness knobs (theta_H), active evaluators, weights, costs, and prompts are automatically persisted to optimization_results.csv.")
+
+    if not df_detailed.empty:
+        st.dataframe(df_detailed, use_container_width=True)
+    else:
+        st.info("Archive is empty. Run generations to evolve agents.")
+
+    st.markdown("---")
+    st.markdown("#### Prompt & Harness Knob Diff Inspector")
+
+    agents_dict = ctrl.archive.agents
+    child_candidates = [a_id for a_id in agents_dict.keys() if agents_dict[a_id].parent_id is not None]
+    if child_candidates:
+        selected_agent_id = st.selectbox(
+            "Select Mutated Child Agent to Inspect vs its Parent",
+            options=child_candidates,
+            index=len(child_candidates) - 1,
+        )
+        child_agent = agents_dict[selected_agent_id]
+        parent_agent = agents_dict.get(child_agent.parent_id)
+
+        col_p1, col_p2 = st.columns(2)
+        with col_p1:
+            st.markdown(f"**Parent Agent (`{parent_agent.id if parent_agent else 'Root'}`)**")
+            if parent_agent:
+                st.code(parent_agent.system_prompt, language="text")
+                st.caption(f"Knobs: Temp={parent_agent.harness_knobs.temperature}, Retries={parent_agent.harness_knobs.max_retries}, Top_p={parent_agent.harness_knobs.top_p}")
+                st.caption(f"Fitness: {parent_agent.fitness:.4f} | Cost: ${parent_agent.cost_spent:.5f}")
+        with col_p2:
+            st.markdown(f"**Child Agent (`{child_agent.id}`)** - Mutation: `{child_agent.mutation_type}`")
+            st.code(child_agent.system_prompt, language="text")
+            st.caption(f"Knobs: Temp={child_agent.harness_knobs.temperature}, Retries={child_agent.harness_knobs.max_retries}, Top_p={child_agent.harness_knobs.top_p}")
+            st.caption(f"Fitness: {child_agent.fitness:.4f} | Cost: ${child_agent.cost_spent:.5f}")
+    else:
+        st.info("Evolve at least 1 child generation to inspect parent-child prompt diffs.")
