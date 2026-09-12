@@ -30,6 +30,67 @@ class HarnessKnobs:
         )
 
 
+AGENT_ARCHETYPES: Dict[str, Dict[str, Any]] = {
+    "General Balanced Assistant": {
+        "id_suffix": "general",
+        "description": "Balanced baseline assistant prioritizing clarity, correctness, and moderate conciseness.",
+        "system_prompt": (
+            "You are an expert, precise, and robust AI coding assistant. "
+            "Solve the given problem clearly, accurately, and efficiently with minimal fluff."
+        ),
+        "harness_knobs": HarnessKnobs(temperature=0.7, max_retries=2, top_p=0.95, max_tokens=1024),
+    },
+    "Algorithmic Specialist Agent": {
+        "id_suffix": "algorithmic",
+        "description": "Specialized in optimal asymptotic time complexity O(N)/O(log N) and space complexity O(1).",
+        "system_prompt": (
+            "You are an algorithmic optimization specialist. Prioritize optimal time and memory complexity. "
+            "Design the most computationally efficient algorithm using optimal dynamic programming, hashing, "
+            "or two-pointer techniques. Output only verified, high-performance code."
+        ),
+        "harness_knobs": HarnessKnobs(temperature=0.5, max_retries=2, top_p=0.90, max_tokens=1024),
+    },
+    "Defensive & Fault-Tolerant Agent": {
+        "id_suffix": "defensive",
+        "description": "Specialized in corner-case validation, exception trapping, and boundary condition resilience.",
+        "system_prompt": (
+            "You are a defensive, fault-tolerant AI software engineer. Before implementing, rigorously identify "
+            "and trap all corner cases (empty inputs, zero values, negative indices, boundary overflows). "
+            "Wrap risky operations in explicit exception handling and parameter validations."
+        ),
+        "harness_knobs": HarnessKnobs(temperature=0.4, max_retries=3, top_p=0.90, max_tokens=1024),
+    },
+    "Chain-of-Thought Reasoning Agent": {
+        "id_suffix": "cot",
+        "description": "Mandates explicit step-by-step invariant reasoning and logical decomposition before code synthesis.",
+        "system_prompt": (
+            "You are an analytical AI reasoning specialist. For every problem: "
+            "1. Outline a concise, 3-step chain of thought establishing input invariants and algorithm logic. "
+            "2. Immediately synthesize the complete, verified Python implementation with no redundant conversational text."
+        ),
+        "harness_knobs": HarnessKnobs(temperature=0.6, max_retries=2, top_p=0.95, max_tokens=1024),
+    },
+    "Minimalist Economy Synthesizer": {
+        "id_suffix": "minimalist",
+        "description": "Ultra-concise agent minimizing token footprint and maximizing response speed with zero commentary.",
+        "system_prompt": (
+            "You are a hyper-concise AI code synthesizer. Deliver pure, production-grade Python implementations. "
+            "Omit all conversational introductions, greetings, markdown explanations, and comments. Return only optimal code."
+        ),
+        "harness_knobs": HarnessKnobs(temperature=0.3, max_retries=1, top_p=0.85, max_tokens=512),
+    },
+    "Safety & Constraint-Aligned Agent": {
+        "id_suffix": "safety",
+        "description": "Strict compliance with safety constraints, type signatures, and anti-hallucination guarantees.",
+        "system_prompt": (
+            "You are a security and constraint-focused AI assistant. Strictly enforce input types, bounds, "
+            "and safety requirements. Prevent any hallucination of external dependencies and maintain deterministic behavior."
+        ),
+        "harness_knobs": HarnessKnobs(temperature=0.3, max_retries=2, top_p=0.90, max_tokens=1024),
+    },
+}
+
+
 @dataclass
 class Agent:
     """Agent candidate representation in the joint search space."""

@@ -7,6 +7,7 @@ import plotly.express as px
 from plotly.subplots import make_subplots
 
 from controller import EvolutionController
+from core.agent import AGENT_ARCHETYPES
 from tasks.benchmark_tasks import BENCHMARK_TASKS
 
 # ---------------------------------------------------------
@@ -42,26 +43,20 @@ st.set_page_config(
 st.markdown("""
 <style>
     .main-header {
-        font-size: 2.2rem;
+        font-size: 2.1rem;
         font-weight: 700;
         color: #1E3A8A;
         margin-bottom: 0.2rem;
     }
     .sub-header {
-        font-size: 1.05rem;
+        font-size: 1.0rem;
         color: #4B5563;
-        margin-bottom: 1.5rem;
-    }
-    .metric-box {
-        background-color: #F8FAFC;
-        border: 1px solid #E2E8F0;
-        border-radius: 8px;
-        padding: 12px 16px;
+        margin-bottom: 1.2rem;
     }
     .badge-core {
         background-color: #DBEAFE;
         color: #1E40AF;
-        padding: 2px 8px;
+        padding: 3px 8px;
         border-radius: 4px;
         font-weight: 600;
         font-size: 0.8rem;
@@ -69,10 +64,17 @@ st.markdown("""
     .badge-deep {
         background-color: #FEF3C7;
         color: #92400E;
-        padding: 2px 8px;
+        padding: 3px 8px;
         border-radius: 4px;
         font-weight: 600;
         font-size: 0.8rem;
+    }
+    .panelist-card {
+        background-color: #F8FAFC;
+        border: 1px solid #E2E8F0;
+        border-radius: 8px;
+        padding: 16px;
+        margin-bottom: 16px;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -87,6 +89,8 @@ if "controller" not in st.session_state:
         model="openai/gpt-oss-120b",
         lambda_penalty=0.5,
         default_strategy="adaptive",
+        initial_archetype="General Balanced Assistant",
+        inter_call_delay=1.5,
     )
 if "generation_count" not in st.session_state:
     st.session_state.generation_count = 0
@@ -102,32 +106,82 @@ with st.sidebar:
     
     current_key = ctrl.api_key or os.getenv("GROQ_API_KEY", "")
     api_key_input = st.text_input(
-        "Groq API Key (Optional / Fallback to Mock)",
+        "Groq API Key (Auto-loaded from .env)",
         value=current_key,
         type="password",
-        help="Provide your Groq API Key to test live LLM mutations. If blank, deterministic simulation mock is used.",
+        help="Reads GROQ_API_KEY from .env file or system environment. If blank, deterministic simulation mock is used.",
     )
     if api_key_input != ctrl.api_key:
         ctrl.api_key = api_key_input
         ctrl.llm_client.api_key = api_key_input
-        if api_key_input.strip():
-            ctrl.llm_client.is_mock = False
-        else:
-            ctrl.llm_client.is_mock = True
+        ctrl.llm_client.is_mock = not bool(api_key_input.strip())
 
-    model_choice = st.selectbox(
-        "Groq Primary Model",
-        options=[
-            "openai/gpt-oss-120b",
-            "qwen/qwen-2.5-coder-32b",
-            "deepseek-r1-distill-llama-70b",
-            "llama-3.1-8b-instant",
-        ],
-        index=0,
+    model_options = [
+        "openai/gpt-oss-120b",
+        "llama-3.3-70b-versatile",
+        "llama-3.1-70b-versatile",
+        "llama3-70b-8192",
+        "mixtral-8x7b-32768",
+        "gemma2-9b-it",
+        "Custom Model...",
+    ]
+    model_selection = st.selectbox("Groq LLM Model", options=model_options, index=0)
+    if model_selection == "Custom Model...":
+        custom_model = st.text_input("Enter Custom Groq Model Identifier", value=ctrl.model)
+        selected_model = custom_model.strip()
+    else:
+        selected_model = model_selection
+
+    if selected_model != ctrl.model:
+        ctrl.model = selected_model
+        ctrl.llm_client.model = selected_model
+
+    delay_slider = st.slider(
+        "Inter-Call Delay (Pacing for TPM Rate Limits)",
+        min_value=0.0,
+        max_value=5.0,
+        value=float(ctrl.inter_call_delay),
+        step=0.5,
+        help="Adds delay between consecutive LLM calls to prevent Groq Tokens-Per-Minute (TPM) rate limit throttling.",
     )
-    if model_choice != ctrl.model:
-        ctrl.model = model_choice
-        ctrl.llm_client.model = model_choice
+    ctrl.inter_call_delay = delay_slider
+    ctrl.llm_client.inter_call_delay = delay_slider
+
+    st.markdown("---")
+    st.markdown("### Selectable Agent Archetypes")
+    
+    archetype_choices = list(AGENT_ARCHETYPES.keys())
+    selected_archetype = st.selectbox(
+        "Initial Seed Agent Persona",
+        options=archetype_choices,
+        index=archetype_choices.index(ctrl.initial_archetype) if ctrl.initial_archetype in archetype_choices else 0,
+        help="Choose among 6 distinct specialized agent archetypes to initialize and evolve.",
+    )
+    st.caption(AGENT_ARCHETYPES[selected_archetype]["description"])
+
+    st.markdown("---")
+    st.markdown("### Selectable Benchmark Task")
+
+    task_choices = ["All Benchmark Tasks (Suite / Random)"] + [t.name for t in BENCHMARK_TASKS]
+    current_task_idx = 0
+    if ctrl.selected_task_id:
+        for idx, t_name in enumerate(task_choices):
+            if t_name == ctrl.selected_task_id:
+                current_task_idx = idx
+                break
+
+    selected_task_name = st.selectbox(
+        "Benchmark Problem / Task Input",
+        options=task_choices,
+        index=current_task_idx,
+        help="Select a specific coding/reasoning problem (e.g. Stock Exchange, Fibonacci, Interval Merge) or test across the full suite.",
+    )
+    ctrl.selected_task_id = None if selected_task_name == "All Benchmark Tasks (Suite / Random)" else selected_task_name
+    
+    if selected_task_name != "All Benchmark Tasks (Suite / Random)":
+        matched_task = next((t for t in BENCHMARK_TASKS if t.name == selected_task_name), None)
+        if matched_task:
+            st.caption(f"**Category:** {matched_task.category}\n\n**Goal:** {matched_task.description[:120]}...")
 
     st.markdown("---")
     st.markdown("### Search & Penalty Knobs")
@@ -144,7 +198,7 @@ with st.sidebar:
         "Cost Penalty Lambda (lambda)",
         min_value=0.0,
         max_value=2.0,
-        value=ctrl.lambda_penalty,
+        value=float(ctrl.lambda_penalty),
         step=0.05,
         help="Higher lambda heavily penalizes invoking expensive Deep Tier evaluators.",
     )
@@ -165,20 +219,20 @@ with st.sidebar:
     col_a1, col_a2 = st.columns(2)
     with col_a1:
         if st.button("Run 1 Gen", use_container_width=True, type="primary"):
-            with st.spinner("Running 1 Generation..."):
+            with st.spinner("Executing 1 Generation..."):
                 ctrl.run_generation(strategy=strategy_mode)
                 st.session_state.generation_count = ctrl.current_generation
                 st.rerun()
 
     with col_a2:
-        if st.button("Run 10 Gen", use_container_width=True):
-            with st.spinner("Running 10 Generations..."):
-                ctrl.run_n_generations(10, strategy=strategy_mode)
+        if st.button("Run 5 Gen", use_container_width=True):
+            with st.spinner("Executing 5 Generations with rate-limit pacing..."):
+                ctrl.run_n_generations(5, strategy=strategy_mode)
                 st.session_state.generation_count = ctrl.current_generation
                 st.rerun()
 
-    if st.button("Reset Evolution State", use_container_width=True):
-        ctrl.reset()
+    if st.button("Reset with Selected Archetype & Task", use_container_width=True):
+        ctrl.reset(initial_archetype=selected_archetype, selected_task_id=ctrl.selected_task_id)
         st.session_state.generation_count = 0
         st.rerun()
 
@@ -215,12 +269,185 @@ st.markdown("---")
 # ---------------------------------------------------------
 # Tabs Layout
 # ---------------------------------------------------------
-tab1, tab2, tab3, tab4 = st.tabs([
+tab_panelist, tab1, tab2, tab3, tab4 = st.tabs([
+    "PANELIST PRESENTATION: Graphs & Results Table",
     "Tab 1: Live Evolution & Pareto Radar",
     "Tab 2: Gaussian Process & Adaptive Weights (Gap 2)",
     "Tab 3: Cost Awareness & Evaluator Pruning (Gaps 1 & 3)",
     "Tab 4: Population Archive & Data Export (CSV)",
 ])
+
+
+# ---------------------------------------------------------
+# TAB PANELIST: Graphs & Results Table (All-in-One Presentation)
+# ---------------------------------------------------------
+with tab_panelist:
+    st.markdown("### Executive Summary & Panelist Presentation Dashboard")
+    st.caption("Consolidated analytical results, Pareto trade-offs, Bayesian acquisition curves, evaluator pruning matrix, and complete tabular performance records.")
+
+    # Top Row Graphs: Radar Profile & Pareto Frontier
+    p_row1_c1, p_row1_c2 = st.columns(2)
+    
+    best_agent = ctrl.archive.get_best_agent()
+    all_agents = ctrl.archive.get_all_agents()
+    seed_agent = all_agents[0] if all_agents else None
+
+    with p_row1_c1:
+        st.markdown("#### Figure 1: Multi-Objective Performance Radar (Best Agent vs Seed Baseline)")
+        if best_agent and best_agent.metrics:
+            categories = list(best_agent.metrics.keys())
+            best_vals = [best_agent.metrics[k] for k in categories]
+            
+            fig_rad = go.Figure()
+            # Best agent trace
+            r_best = best_vals + [best_vals[0]]
+            t_cat = categories + [categories[0]]
+            fig_rad.add_trace(go.Scatterpolar(
+                r=r_best,
+                theta=t_cat,
+                fill='toself',
+                name=f"Evolved Best ({best_agent.id})",
+                line_color='#2563EB',
+                fillcolor='rgba(37, 99, 235, 0.25)',
+            ))
+
+            # Seed agent trace
+            if seed_agent and seed_agent.metrics:
+                seed_vals = [seed_agent.metrics.get(k, 0.0) for k in categories]
+                r_seed = seed_vals + [seed_vals[0]]
+                fig_rad.add_trace(go.Scatterpolar(
+                    r=r_seed,
+                    theta=t_cat,
+                    fill='toself',
+                    name=f"Initial Seed ({seed_agent.id})",
+                    line_color='#9CA3AF',
+                    fillcolor='rgba(156, 163, 175, 0.15)',
+                    line=dict(dash='dot'),
+                ))
+
+            fig_rad.update_layout(
+                polar=dict(radialaxis=dict(visible=True, range=[0, 1.0])),
+                showlegend=True,
+                height=360,
+                margin=dict(l=30, r=30, t=30, b=30),
+            )
+            st.plotly_chart(fig_rad, use_container_width=True)
+        else:
+            st.info("Execute generations to populate Figure 1.")
+
+    with p_row1_c2:
+        st.markdown("#### Figure 2: Non-Dominated Pareto Frontier (Accuracy vs Latency vs Cost)")
+        pareto_agents = ctrl.archive.get_pareto_front()
+        pareto_ids = {a.id for a in pareto_agents}
+
+        if all_agents:
+            scatter_data = []
+            for a in all_agents:
+                scatter_data.append({
+                    "Agent ID": a.id,
+                    "Generation": a.generation,
+                    "Correctness (mu_1)": a.metrics.get("mu_1_correctness", 0.0),
+                    "Latency Score (mu_2)": a.metrics.get("mu_2_latency", 0.0),
+                    "Reasoning (mu_4)": a.metrics.get("mu_4_reasoning", 0.0),
+                    "Cost ($)": a.cost_spent,
+                    "Fitness": a.fitness,
+                    "Pareto Status": "Pareto Optimal (Non-Dominated)" if a.id in pareto_ids else "Dominated Candidate",
+                })
+            df_scatter = pd.DataFrame(scatter_data)
+            fig_p_scat = px.scatter(
+                df_scatter,
+                x="Correctness (mu_1)",
+                y="Latency Score (mu_2)",
+                size="Fitness",
+                color="Pareto Status",
+                hover_data=["Agent ID", "Generation", "Cost ($)", "Reasoning (mu_4)"],
+                color_discrete_map={"Pareto Optimal (Non-Dominated)": "#DC2626", "Dominated Candidate": "#3B82F6"},
+            )
+            fig_p_scat.update_layout(height=360, margin=dict(l=30, r=30, t=30, b=30))
+            st.plotly_chart(fig_p_scat, use_container_width=True)
+        else:
+            st.info("Execute generations to populate Figure 2.")
+
+    # Middle Row Graphs: Cost Savings & Evaluator Pruning Heatmap
+    p_row2_c1, p_row2_c2 = st.columns(2)
+    with p_row2_c1:
+        st.markdown("#### Figure 3: Cumulative Cost Savings (Adaptive Pruned vs Naive Full Suite)")
+        df_rec = pd.DataFrame(ctrl.archive.generation_records)
+        if not df_rec.empty and "cumulative_adaptive_cost" in df_rec.columns:
+            fig_p_cost = go.Figure()
+            fig_p_cost.add_trace(go.Scatter(
+                x=df_rec["generation"],
+                y=df_rec["cumulative_naive_cost"],
+                mode='lines+markers',
+                name='Naive Full Suite (All 6 Evaluators)',
+                line=dict(color='#DC2626', width=2, dash='dash'),
+            ))
+            fig_p_cost.add_trace(go.Scatter(
+                x=df_rec["generation"],
+                y=df_rec["cumulative_adaptive_cost"],
+                mode='lines+markers',
+                name='Our Selective Adaptive Suite (Gaps 1 & 3)',
+                line=dict(color='#10B981', width=3),
+            ))
+            fig_p_cost.update_layout(
+                xaxis_title="Generation",
+                yaxis_title="Cumulative Cost (USD $)",
+                height=340,
+                margin=dict(l=30, r=30, t=30, b=30),
+                legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01),
+            )
+            st.plotly_chart(fig_p_cost, use_container_width=True)
+        else:
+            st.info("Execute generations to populate Figure 3.")
+
+    with p_row2_c2:
+        st.markdown("#### Figure 4: Selective Evaluator Activation & Pruning Matrix")
+        if all_agents:
+            heatmap_data = []
+            gen_labels = []
+            for a in all_agents:
+                gen_labels.append(f"G{a.generation} ({a.id[:7]})")
+                row_flags = [1 if m in a.active_evaluators else 0 for m in ctrl.metric_names]
+                heatmap_data.append(row_flags)
+
+            fig_p_heat = go.Figure(data=go.Heatmap(
+                z=np.array(heatmap_data).T,
+                x=gen_labels,
+                y=ctrl.metric_names,
+                colorscale=[[0, '#F1F5F9'], [1, '#10B981']],
+                showscale=False,
+            ))
+            fig_p_heat.update_layout(
+                xaxis_title="Evaluated Candidates per Generation",
+                yaxis_title="Evaluator Dimension",
+                height=340,
+                margin=dict(l=30, r=30, t=30, b=30),
+            )
+            st.plotly_chart(fig_p_heat, use_container_width=True)
+        else:
+            st.info("Execute generations to populate Figure 4.")
+
+    st.markdown("---")
+    st.markdown("#### Comprehensive Experimental Results Table")
+    df_panelist_results = ctrl.archive.to_detailed_dataframe()
+    if not df_panelist_results.empty:
+        # Display with download button
+        col_down1, col_down2 = st.columns([3, 1])
+        with col_down1:
+            st.caption("Complete table of parameters, harness knobs (temperature, retries, top_p), multi-metric evaluation scores, scalarized fitness, and costs.")
+        with col_down2:
+            st.download_button(
+                label="Download Results CSV for Panelists",
+                data=df_panelist_results.to_csv(index=False).encode('utf-8'),
+                file_name="multi_objective_agent_optimization_results.csv",
+                mime="text/csv",
+                use_container_width=True,
+                type="primary",
+            )
+        st.dataframe(df_panelist_results, use_container_width=True)
+    else:
+        st.info("No experimental records available. Run generations to populate.")
+
 
 # ---------------------------------------------------------
 # TAB 1: Live Evolution & Pareto Radar
@@ -229,14 +456,11 @@ with tab1:
     st.subheader("Pareto Optimization & Multi-Objective Profile")
     col_t1_left, col_t1_right = st.columns([1, 1])
 
-    best_agent = ctrl.archive.get_best_agent()
-
     with col_t1_left:
         st.markdown("#### Best Agent Multi-Objective Radar Profile")
         if best_agent and best_agent.metrics:
             categories = list(best_agent.metrics.keys())
             values = [best_agent.metrics[k] for k in categories]
-            # Close the radar polygon
             categories.append(categories[0])
             values.append(values[0])
 
@@ -250,9 +474,7 @@ with tab1:
                 fillcolor='rgba(37, 99, 235, 0.25)',
             ))
             fig_radar.update_layout(
-                polar=dict(
-                    radialaxis=dict(visible=True, range=[0, 1.0])
-                ),
+                polar=dict(radialaxis=dict(visible=True, range=[0, 1.0])),
                 showlegend=True,
                 height=380,
                 margin=dict(l=40, r=40, t=30, b=30),
@@ -275,7 +497,6 @@ with tab1:
                 line=dict(color='#10B981', width=2),
                 marker=dict(size=7),
             ))
-            # Cumulative best
             df_records["cum_best"] = df_records["fitness"].cummax()
             fig_traj.add_trace(go.Scatter(
                 x=df_records["generation"],
@@ -294,40 +515,6 @@ with tab1:
             st.plotly_chart(fig_traj, use_container_width=True)
         else:
             st.info("No generation records yet.")
-
-    # 2D/3D Pareto Scatter
-    st.markdown("#### Pareto Frontier: Correctness vs Latency vs Cost")
-    agents_all = ctrl.archive.get_all_agents()
-    pareto_agents = ctrl.archive.get_pareto_front()
-    pareto_ids = {a.id for a in pareto_agents}
-
-    if agents_all:
-        scatter_data = []
-        for a in agents_all:
-            scatter_data.append({
-                "Agent ID": a.id,
-                "Generation": a.generation,
-                "Correctness (mu_1)": a.metrics.get("mu_1_correctness", 0.0),
-                "Latency Score (mu_2)": a.metrics.get("mu_2_latency", 0.0),
-                "Reasoning (mu_4)": a.metrics.get("mu_4_reasoning", 0.0),
-                "Cost ($)": a.cost_spent,
-                "Fitness": a.fitness,
-                "Is Pareto": "Pareto Optimal" if a.id in pareto_ids else "Dominated",
-            })
-        df_scatter = pd.DataFrame(scatter_data)
-
-        fig_scatter = px.scatter(
-            df_scatter,
-            x="Correctness (mu_1)",
-            y="Latency Score (mu_2)",
-            size="Fitness",
-            color="Is Pareto",
-            hover_data=["Agent ID", "Generation", "Cost ($)", "Reasoning (mu_4)"],
-            color_discrete_map={"Pareto Optimal": "#EF4444", "Dominated": "#3B82F6"},
-            title="Non-Dominated Pareto Candidates across Generations",
-        )
-        fig_scatter.update_layout(height=400, margin=dict(l=40, r=40, t=40, b=30))
-        st.plotly_chart(fig_scatter, use_container_width=True)
 
 
 # ---------------------------------------------------------

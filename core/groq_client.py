@@ -12,18 +12,30 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+import time
+
 FALLBACK_MODELS = [
     "openai/gpt-oss-120b",
-    "llama-3.1-8b-instant",
+    "llama-3.3-70b-versatile",
+    "llama3-70b-8192",
+    "mixtral-8x7b-32768",
+    "gemma2-9b-it",
+    "openai/gpt-oss-20b"
 ]
 
 
 class GroqLLMClient:
-    """Groq LLM Client supporting primary models, active fallbacks, and offline simulation mode."""
+    """Groq LLM Client supporting primary models, active fallbacks, rate limit backoff, and offline simulation mode."""
 
-    def __init__(self, api_key: Optional[str] = None, model: str = "openai/gpt-oss-120b"):
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        model: str = "openai/gpt-oss-120b",
+        inter_call_delay: float = 1.5,
+    ):
         self.api_key = api_key or os.getenv("GROQ_API_KEY", "")
         self.model = model
+        self.inter_call_delay = inter_call_delay
         self.client = None
         self.is_mock = False
 
@@ -44,7 +56,7 @@ class GroqLLMClient:
         top_p: float = 0.95,
         max_tokens: int = 1024,
     ) -> str:
-        """Generates response using Groq API with automatic fallback sequence or deterministic mock."""
+        """Generates response using Groq API with automatic TPM rate-limit retry backoff and fallbacks."""
         if self.is_mock or not self.client:
             return self._mock_generate(system_prompt, user_prompt, temperature)
 
@@ -52,21 +64,38 @@ class GroqLLMClient:
         last_error = None
 
         for model_name in candidate_models:
-            try:
-                response = self.client.chat.completions.create(
-                    model=model_name,
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_prompt},
-                    ],
-                    temperature=max(0.0, min(2.0, temperature)),
-                    top_p=max(0.0, min(1.0, top_p)),
-                    max_tokens=max_tokens,
-                )
-                return response.choices[0].message.content or ""
-            except Exception as e:
-                logger.warning(f"Groq generation failed on model '{model_name}': {e}. Trying fallback.")
-                last_error = e
+            # Attempt up to 3 retries with exponential backoff on TPM rate limits
+            for attempt in range(3):
+                try:
+                    if self.inter_call_delay > 0:
+                        time.sleep(self.inter_call_delay)
+
+                    response = self.client.chat.completions.create(
+                        model=model_name,
+                        messages=[
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": user_prompt},
+                        ],
+                        temperature=max(0.0, min(2.0, temperature)),
+                        top_p=max(0.0, min(1.0, top_p)),
+                        max_tokens=max_tokens,
+                    )
+                    return response.choices[0].message.content or ""
+                except Exception as e:
+                    err_str = str(e).lower()
+                    last_error = e
+                    # Check for rate limit / TPM / RPM error
+                    if "429" in err_str or "rate limit" in err_str or "tokens per minute" in err_str:
+                        backoff = (attempt + 1) * 3.5
+                        logger.warning(f"Rate limit hit on {model_name} (attempt {attempt+1}/3). Backing off {backoff}s...")
+                        time.sleep(backoff)
+                        continue
+                    elif "404" in err_str or "model_not_found" in err_str or "decommissioned" in err_str:
+                        logger.warning(f"Model '{model_name}' inaccessible (404/decommissioned). Switching to next fallback.")
+                        break  # Try next candidate model
+                    else:
+                        logger.warning(f"Generation error on '{model_name}': {e}. Retrying.")
+                        time.sleep(1.0)
 
         logger.error(f"All Groq models failed. Reverting to mock response. Error: {last_error}")
         return self._mock_generate(system_prompt, user_prompt, temperature)
@@ -177,6 +206,35 @@ class GroqLLMClient:
                 "            if not stack or stack.pop() != mapping[char]:\n"
                 "                return False\n"
                 "    return len(stack) == 0\n"
+                "```"
+            )
+        elif "stock" in lower_user or "buy" in lower_user or "sell" in lower_user:
+            return (
+                "```python\n"
+                "def solve(prices: list) -> int:\n"
+                "    if not prices or len(prices) < 2:\n"
+                "        return 0\n"
+                "    min_price = float('inf')\n"
+                "    max_profit = 0\n"
+                "    for price in prices:\n"
+                "        if price < min_price:\n"
+                "            min_price = price\n"
+                "        elif price - min_price > max_profit:\n"
+                "            max_profit = price - min_price\n"
+                "    return max_profit\n"
+                "```"
+            )
+        elif "two_sum" in lower_user or "two sum" in lower_user or "target" in lower_user:
+            return (
+                "```python\n"
+                "def solve(nums: list, target: int) -> list:\n"
+                "    seen = {}\n"
+                "    for i, num in enumerate(nums):\n"
+                "        comp = target - num\n"
+                "        if comp in seen:\n"
+                "            return sorted([seen[comp], i])\n"
+                "        seen[num] = i\n"
+                "    return []\n"
                 "```"
             )
         else:

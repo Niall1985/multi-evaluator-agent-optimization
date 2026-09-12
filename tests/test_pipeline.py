@@ -212,6 +212,21 @@ class TestMultiObjectiveAgentOptimization(unittest.TestCase):
         if os.path.exists(csv_file):
             os.remove(csv_file)
 
+    def test_stock_exchange_and_task_selection(self):
+        stock_task = get_benchmark_task("task_stock_exchange")
+        self.assertIsNotNone(stock_task)
+        self.assertEqual(stock_task.name, "Best Time to Buy & Sell Stock (Stock Exchange)")
+
+        controller = EvolutionController(
+            api_key="",
+            model="openai/gpt-oss-120b",
+            initial_archetype="Algorithmic Specialist Agent",
+            selected_task_id="task_stock_exchange",
+        )
+        self.assertEqual(controller.initial_archetype, "Algorithmic Specialist Agent")
+        res = controller.run_generation(strategy="adaptive")
+        self.assertEqual(controller.current_generation, 1)
+
 
 if __name__ == "__main__":
     unittest.main()

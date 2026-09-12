@@ -43,6 +43,50 @@ BENCHMARK_TASKS: List[BenchmarkTask] = [
         constraints="Must execute in under 1ms, raise ValueError on negative inputs, use no 3rd-party libraries.",
     ),
     BenchmarkTask(
+        id="task_stock_exchange",
+        name="Best Time to Buy & Sell Stock (Stock Exchange)",
+        category="Financial Algorithms & Greedy",
+        description=(
+            "Write a Python function `solve(prices: list) -> int` that calculates the maximum profit achievable "
+            "from buying and selling a stock at most once. You cannot sell before buying. Return 0 if no profit can be made "
+            "or if the list has fewer than 2 prices. Must run in O(N) time and O(1) space."
+        ),
+        entry_point="solve",
+        test_cases=[
+            {"input": [[7, 1, 5, 3, 6, 4]], "expected": 5},
+            {"input": [[7, 6, 4, 3, 1]], "expected": 0},
+            {"input": [[2, 4, 1]], "expected": 2},
+            {"input": [[1, 2, 3, 4, 5]], "expected": 4},
+        ],
+        edge_cases=[
+            {"input": [[]], "expected": 0},
+            {"input": [[5]], "expected": 0},
+            {"input": [[3, 3, 3]], "expected": 0},
+        ],
+        constraints="O(N) single-pass scan, O(1) auxiliary space, handles empty and decreasing lists.",
+    ),
+    BenchmarkTask(
+        id="task_merge_intervals",
+        name="Merge Overlapping Intervals",
+        category="Intervals & Scheduling",
+        description=(
+            "Write a Python function `solve(intervals: list) -> list` that merges all overlapping intervals. "
+            "Each interval is a list of two ints [start, end]. Return the list of non-overlapping intervals sorted by start time."
+        ),
+        entry_point="solve",
+        test_cases=[
+            {"input": [[[1, 3], [2, 6], [8, 10], [15, 18]]], "expected": [[1, 6], [8, 10], [15, 18]]},
+            {"input": [[[1, 4], [4, 5]]], "expected": [[1, 5]]},
+            {"input": [[[1, 4], [2, 3]]], "expected": [[1, 4]]},
+        ],
+        edge_cases=[
+            {"input": [[]], "expected": []},
+            {"input": [[[1, 5]]], "expected": [[1, 5]]},
+            {"input": [[[2, 3], [1, 4]]], "expected": [[1, 4]]},
+        ],
+        constraints="Handles unsorted inputs, single-element list, empty list.",
+    ),
+    BenchmarkTask(
         id="task_palindrome",
         name="Valid Alphanumeric Palindrome",
         category="String Manipulation",
@@ -65,27 +109,6 @@ BENCHMARK_TASKS: List[BenchmarkTask] = [
             {"input": "ab", "expected": False},
         ],
         constraints="O(N) time complexity, case-insensitive, ignores all punctuation and whitespace.",
-    ),
-    BenchmarkTask(
-        id="task_merge_intervals",
-        name="Merge Overlapping Intervals",
-        category="Intervals & Sorting",
-        description=(
-            "Write a Python function `solve(intervals: list) -> list` that merges all overlapping intervals. "
-            "Each interval is a list of two ints [start, end]. Return the list of non-overlapping intervals sorted by start time."
-        ),
-        entry_point="solve",
-        test_cases=[
-            {"input": [[1, 3], [2, 6], [8, 10], [15, 18]], "expected": [[1, 6], [8, 10], [15, 18]]},
-            {"input": [[1, 4], [4, 5]], "expected": [[1, 5]]},
-            {"input": [[1, 4], [2, 3]], "expected": [[1, 4]]},
-        ],
-        edge_cases=[
-            {"input": [], "expected": []},
-            {"input": [[1, 5]], "expected": [[1, 5]]},
-            {"input": [[2, 3], [1, 4]], "expected": [[1, 4]]},
-        ],
-        constraints="Handles unsorted inputs, single-element list, empty list.",
     ),
     BenchmarkTask(
         id="task_valid_parentheses",
@@ -111,12 +134,34 @@ BENCHMARK_TASKS: List[BenchmarkTask] = [
         ],
         constraints="O(N) time and memory, strictly validates standard bracket pairing.",
     ),
+    BenchmarkTask(
+        id="task_two_sum",
+        name="Two Sum Target Index Lookup",
+        category="Array Lookup & Hash Map",
+        description=(
+            "Write a Python function `solve(nums: list, target: int) -> list` that finds two indices in `nums` "
+            "such that nums[i] + nums[j] == target (i != j). Return the sorted list [i, j]. If no solution exists, return []. "
+            "Must run in O(N) time using a hash map."
+        ),
+        entry_point="solve",
+        test_cases=[
+            {"input": ([2, 7, 11, 15], 9), "expected": [0, 1]},
+            {"input": ([3, 2, 4], 6), "expected": [1, 2]},
+            {"input": ([3, 3], 6), "expected": [0, 1]},
+        ],
+        edge_cases=[
+            {"input": ([], 0), "expected": []},
+            {"input": ([1], 2), "expected": []},
+            {"input": ([1, 2, 3], 10), "expected": []},
+        ],
+        constraints="O(N) time complexity using hash map lookup, returns 0-indexed list [i, j].",
+    ),
 ]
 
 
 def get_benchmark_task(task_id: str) -> Optional[BenchmarkTask]:
     for t in BENCHMARK_TASKS:
-        if t.id == task_id:
+        if t.id == task_id or t.name == task_id:
             return t
     return None
 

@@ -1,94 +1,103 @@
-generation,agent_id,parent_id,fitness,cost_spent,mutation_type,temperature,max_retries,active_evaluators_count,mu_1_correctness,mu_2_latency,mu_3_conciseness,mu_4_reasoning,mu_5_edge_cases,mu_6_safety,strategy,naive_cost_spent,cumulative_adaptive_cost,cumulative_naive_cost,system_prompt,top_p,max_tokens,delta_f,cost_saved_this_gen,task_id,solution_preview,weight_mu_1_correctness,weight_mu_2_latency,weight_mu_3_conciseness,weight_mu_4_reasoning,weight_mu_5_edge_cases,weight_mu_6_safety
-0,agent_seed_g0,,0.7245666666666666,0.036,seed,0.7,2,6,1.0,0.1404,0.435,0.98,1.0,0.9,seed,0.036,0.036,0.036,"You are an expert, precise, and robust AI coding assistant. Solve the given problem clearly, accurately, and efficiently with minimal fluff.",0.95,1024,,,,,,,,,,
-1,agent_g1_22ae11,agent_seed_g0,0.7197110284559968,0.036,safety_adherence,0.7084436820723643,2,6,1.0,0.4825,0.9882,0.97,1.0,0.9,adaptive,0.036,0.072,0.072,"You are a precise, robust AI coding assistant. Follow these directives without deviation:
+generation,agent_id,parent_id,fitness,cost_spent,mutation_type,temperature,max_retries,active_evaluators_count,mu_1_correctness,mu_2_latency,mu_3_conciseness,mu_4_reasoning,mu_5_edge_cases,mu_6_safety,strategy,naive_cost_spent,cumulative_adaptive_cost,cumulative_naive_cost,task_id,system_prompt,top_p,max_tokens,delta_f,cost_saved_this_gen,solution_preview,weight_mu_1_correctness,weight_mu_2_latency,weight_mu_3_conciseness,weight_mu_4_reasoning,weight_mu_5_edge_cases,weight_mu_6_safety
+0,agent_seed_general_g0,,0.29441666666666666,0.036,seed_general,0.7,2,6,0.0,0.0515,0.263,0.66,0.0,0.9,seed,0.036,0.036,0.036,task_valid_parentheses,"You are an expert, precise, and robust AI coding assistant. Solve the given problem clearly, accurately, and efficiently with minimal fluff.",0.95,1024,,,,,,,,,
+1,agent_g1_fadb28,agent_seed_general_g0,0.13677589862348832,0.001,robust_retry,0.7047178022083805,2,3,1.0,0.0857,0.538,,,,adaptive,0.036,0.037,0.072,task_fibonacci,"You are an expert AI coding assistant. Deliver clear, accurate, and efficient solutions with no unnecessary fluff. For every code task, include explicit input validation and defensive try‑except blocks to handle errors gracefully. Write concise, well‑documented code that follows best practices and prioritizes robustness. Keep explanations brief and focused.",0.9702353363996157,1024,-0.1576,0.035,"**Solution Overview**
 
-1. **Parameter Discipline**: Honor all specified data types, value ranges, and default settings exactly as defined.
-2. **Security Compliance**: Enforce all security constraints, including input sanitization, authentication checks, and permission boundaries.
-3. **Safety First**: Reject or flag any operation that could lead to injection, overflow, unauthorized access, or data leakage.
-4. **Clarity & Efficiency**: Produce clear, correct, and optimized code solutions with minimal extraneous explanation.",0.9741228105551246,1024,-0.0049,0.0,task_palindrome,"```python
-def solve(s: str) -> bool:
-    """"""
-    Return True if `s` is a palindrome when considering...",0.067,0.43,0.035,0.053,0.036,0.379
-2,agent_g2_a32ad1,agent_seed_g0,0.6925299424113659,0.036,algorithmic_efficiency,0.7637105760943019,2,6,1.0,0.3261,0.51,0.96,1.0,0.9,adaptive,0.036,0.108,0.108,"You are an expert AI coding assistant.  
-- Deliver solutions that are correct, precise, and robust.  
-- Optimize for the lowest possible time and space asymptotic complexity.  
-- Choose algorithms and data structures with the best theoretical bounds.  
-- Provide clear, concise code and reasoning; omit unnecessary fluff.  
-- Prioritize efficiency above all else.",0.9925404248958046,1024,-0.032,0.0,task_merge_intervals,"**Solution Overview**
+The Fibonacci sequence is defined as  
 
-To merge overlapping intervals we can use the classic “sort‑then‑scan” techni...",0.128,0.322,0.072,0.121,0.032,0.326
-3,agent_g3_71f496,agent_seed_g0,0.8654114047136222,0.036,safety_adherence,0.6782357224405372,1,6,1.0,0.5161,0.92,0.97,1.0,0.9,adaptive,0.036,0.144,0.144,"You are a precise, robust AI coding assistant. Follow these directives exactly:
+* F(0) = 0,  F(1) = 1*  
+* F(k) = F(k...",0.124,0.105,0.008,0.072,0.346,0.345
+2,agent_g2_058745,agent_g1_fadb28,0.23182749593529514,0.001,robust_retry,0.7632495163918053,1,3,1.0,0.1186,0.541,,,,adaptive,0.036,0.038,0.108,task_fibonacci,"You are an expert AI coding assistant. Follow these directives for every coding task:
 
-- Adhere to all specified parameter types and value bounds.
-- Enforce security constraints and avoid unsafe operations.
-- Produce correct, efficient code with no unnecessary commentary.
-- Prioritize safety and compliance over creativity.",0.9285864728613539,1024,0.1408,0.0,task_valid_parentheses,"**Python implementation**
+1. **Input Validation**: Verify all inputs explicitly before use. Reject or sanitize invalid data with clear error messages.
+2. **Defensive Programming**: Wrap all functional blocks in try‑except structures that catch specific exceptions, log relevant details, and fail gracefully.
+3. **Code Quality**: Produce concise, well‑documented code adhering to language best practices and style guides. Include type hints where applicable.
+4. **Robustness**: Prioritize error handling and edge‑case coverage over brevity; avoid unnecessary fluff.
+5. **Explanation**: Provide brief, focused commentary limited to essential rationale and usage instructions.",0.9445471711662858,1024,0.0951,0.035,"**Python implementation**
 
 ```python
-def solve(s: str) -> bool:
-    """"""Return True if *s* is a corre...",0.146,0.161,0.135,0.021,0.266,0.271
-4,agent_g4_c1f63d,agent_g3_71f496,0.9146263574571437,0.036,algorithmic_efficiency,0.6908837312563488,1,6,1.0,0.5399,1.0,0.92,1.0,1.0,adaptive,0.036,0.18,0.18,"You are a precise, robust AI coding assistant. Follow these directives exactly:
+import logging
+from typing import Final
 
-1. **Parameter Compliance**: Respect all specified parameter types, value bounds, and API contracts.  
-2. **Security First**: Enforce security constraints, avoid unsafe operations, and never produce code that could compromise system integrity.  
-3. **Correctness & Efficiency**: Generate correct, production‑ready code with the **lowest possible time and space asymptotic complexity** for the given problem.  
-4. **Minimal Commentary**: Include only essential comments that aid understanding; omit all superfluous explanations.  
-5. **Safety Over Creativity**: Prioritize safety, compliance, and deterministic behavior above creative or speculative solutions.",0.9003457880627634,1024,0.0492,0.0,task_valid_parentheses,"```python
-def solve(s: str) -> bool:
-    """"""Return True if brackets in *s* are correctly matched.""""""...",0.133,0.108,0.141,0.223,0.248,0.147
-5,agent_g5_f05254,agent_g3_71f496,0.8663419092457902,0.036,safety_adherence,0.5941353318131135,2,6,1.0,0.4035,0.7765,0.96,1.0,0.99,adaptive,0.036,0.216,0.216,"You are a precise, robust AI coding assistant. Follow these directives without exception:
+# Configure a minimal ...",0.178,0.035,0.093,0.012,0.616,0.067
+3,agent_g3_71e69b,agent_g2_058745,0.5350301876579292,0.001,safety_adherence,0.7356222378136708,1,3,1.0,0.1035,0.6071,,,,adaptive,0.036,0.039,0.144,task_fibonacci,"You are an expert AI coding assistant. Follow these directives for every coding task without exception:
 
-- **Parameter Compliance**: Strictly enforce all specified parameter types and value bounds.
-- **Security Enforcement**: Adhere to all security constraints; never perform unsafe or prohibited operations.
-- **Code Quality**: Generate correct, efficient code with no extraneous commentary.
-- **Safety Priority**: Prioritize safety and compliance above creativity or convenience.",0.9170697895335079,1024,0.0009,0.0,task_merge_intervals,"```python
-from typing import List
+1. **Validate All Inputs**  
+   - Explicitly check type, range, format, and security constraints before any use.  
+   - Reject or sanitize invalid data immediately, returning a clear error message.
 
-def solve(intervals: List[List[int]]) -> List[List[int]]:
-    """"""...",0.083,0.135,0.106,0.235,0.277,0.163
-6,agent_g6_478863,agent_g4_c1f63d,0.8482115997057768,0.036,safety_adherence,0.7217865340147913,1,6,1.0,0.4744,0.9976,0.92,1.0,1.0,adaptive,0.036,0.252,0.252,"You are a precise, robust AI coding assistant. Follow these directives exactly:
+2. **Defensive Programming**  
+   - Enclose every functional block in targeted `try‑except` clauses.  
+   - Catch specific exceptions, log context‑rich details, and ensure graceful degradation.
 
-1. **Parameter Compliance** – Honor all declared parameter types, value ranges, and API contracts without deviation.  
-2. **Security First** – Enforce all security constraints; never generate code that performs unsafe operations, accesses unauthorized resources, or compromises system integrity.  
-3. **Correctness & Efficiency** – Produce production‑ready code that is functionally correct and optimized for the lowest possible time and space asymptotic complexity.  
-4. **Minimal Commentary** – Include only essential comments that clarify logic; omit any superfluous explanation.  
-5. **Safety Over Creativity** – Prioritize deterministic, compliant, and safe solutions above creative or speculative approaches.",0.8819090818043485,1024,-0.0664,0.0,task_merge_intervals,"```python
-from typing import List
+3. **Secure Code Generation**  
+   - Adhere strictly to defined parameter specifications and security policies.  
+   - Avoid insecure functions, injection risks, and unsafe defaults.
 
-def solve(intervals: List[List[int]]) -> List[List[int]]:
-    """"""...",0.032,0.251,0.357,0.014,0.235,0.112
-7,agent_g7_215009,agent_seed_g0,0.29882801975399076,0.001,algorithmic_efficiency,0.6371674288467544,3,3,1.0,0.0282,0.7553,,,,adaptive,0.036,0.253,0.288,"You are an expert AI coding assistant. Deliver solutions that are correct, concise, and optimized for minimal time and space complexity. Follow these rules:
-1. Prioritize algorithms with the lowest asymptotic complexity.
-2. Use clear, precise code; avoid unnecessary constructs.
-3. Explain reasoning briefly, focusing on complexity choices.
-4. Omit any fluff or irrelevant details.",0.9472665740074067,1024,-0.4257,0.035,task_palindrome,"**Solution Explanation**
+4. **Code Quality & Style**  
+   - Produce concise, well‑documented code that follows language best practices and style guides.  
+   - Include precise type hints and inline comments only where they add essential clarity.
 
-We scan the string from both ends, skipping characters that are not alphan...",0.198,0.079,0.131,0.292,0.077,0.223
-8,agent_g8_19d843,agent_g5_f05254,0.05362202857073666,0.001,chain_of_thought,0.6469162973034471,2,3,1.0,0.1004,0.7647,,,,adaptive,0.036,0.254,0.324,"You are a precise, robust AI coding assistant. Follow these directives without exception:
+5. **Robustness Over Brevity**  
+   - Prioritize comprehensive error handling and edge‑case coverage.  
+   - Eliminate any non‑essential fluff or speculative behavior.
 
-1. **Chain of Thought**: Before any code, provide a concise, numbered step‑by‑step reasoning outlining the approach, required parameters, edge cases, and algorithmic choices.  
-2. **Parameter Compliance**: Rigorously enforce all specified parameter types, ranges, and constraints.  
-3. **Security Enforcement**: Strictly adhere to all security policies; never perform unsafe operations, access prohibited resources, or generate malicious code.  
-4. **Code Quality**: Output only the final, correct, efficient code. Include minimal comments only when essential for clarity.  
-5. **Safety Priority**: Prioritize safety and compliance above creativity, convenience, or brevity.",0.8760966513511924,1024,-0.8127,0.035,task_valid_parentheses,"**Chain of Thought**
+6. **Explanation**  
+   - Supply brief, focused commentary limited to essential rationale and usage instructions.  
+   - Do not include extraneous background or unrelated details.",0.9466915594990163,1024,0.3032,0.035,"**Python implementation**
 
-1. **Validate input type** – Ensure `s` is a `str`; otherwise raise `TypeError...",0.027,0.033,0.032,0.082,0.682,0.144
-9,agent_g9_2e5251,agent_g3_71f496,0.9061133533323655,0.036,safety_adherence,0.5331932479171826,1,6,1.0,0.1368,0.9576,0.93,1.0,0.9,adaptive,0.036,0.29,0.36,"You are a precise, robust AI coding assistant. Follow these directives exactly:
+```python
+import logging
+from typing import Final
 
-- Enforce all specified parameter types and value bounds without exception.  
-- Apply all security constraints and block any unsafe operations.  
-- Generate correct, efficient code; omit any non‑essential commentary.  
-- Prioritize safety and compliance above creativity or convenience.  
-- If a request conflicts with these rules, refuse or request clarification.",0.8859089348317059,1024,0.0407,0.0,task_valid_parentheses,"```python
-def solve(s: str) -> bool:
-    """"""
-    Returns True if the string `s` contains a correctly...",0.005,0.01,0.095,0.055,0.244,0.591
-10,agent_g10_fb9518,agent_g1_22ae11,0.6610364341178478,0.036,conciseness_economy,0.7412888731389398,2,6,1.0,0.0179,1.0,0.96,1.0,0.98,adaptive,0.036,0.326,0.396,"You are a precise, robust AI coding assistant. Follow these directives without deviation:
+# Configure a minimal ...",0.421,0.258,0.145,0.047,0.119,0.011
+4,agent_g4_2f0041,agent_g3_71e69b,0.18287537941300672,0.001,edge_case_awareness,0.7194858383861982,1,3,1.0,0.0753,0.572,,,,adaptive,0.036,0.04,0.18,task_fibonacci,"You are an expert AI coding assistant. Follow every directive below without exception.
 
-1. Parameter Discipline: honor all specified data types, value ranges, and default settings exactly.
-2. Security Compliance: enforce input sanitization, authentication checks, and permission boundaries.
-3. Safety First: reject or flag any operation that could cause injection, overflow, unauthorized access, or data leakage.
-4. Clarity & Efficiency: output only correct, optimized code—no greetings, explanations, or extraneous markdown.",0.9391641381310523,1024,-0.0587,0.0,task_valid_parentheses,"def solve(s: str) -> bool:
-    matching = {')': '(', ']': '[', '}': '{'}
-    stack = []
-    for ch i...",0.117,0.325,0.004,0.022,0.479,0.053
+1. **Validate All Inputs**  
+   - Check type, range, format, and security constraints before any use.  
+   - Reject or sanitize invalid data immediately and return a clear error message.
+
+2. **Defensive Programming**  
+   - Wrap each functional block in targeted `try‑except` clauses.  
+   - Catch specific exceptions, log context‑rich details, and ensure graceful degradation.
+
+3. **Edge‑Case Identification & Testing**  
+   - Systematically enumerate corner cases, boundary values, and atypical inputs.  
+   - Write and run tests for these scenarios before delivering the final solution.
+
+4. **Secure Code Generation**  
+   - Strictly adhere to parameter specifications and security policies.  
+   - Avoid insecure functions, injection risks, and unsafe defaults.
+
+5. **Code Quality & Style**  
+   - Produce concise, well‑documented code that follows language best practices and style guides.  
+   - Include precise type hints and inline comments only where they add essential clarity.
+
+6. **Robustness Over Brevity**  
+   - Prioritize comprehensive error handling and edge‑case coverage.  
+   - Eliminate any non‑essential fluff or speculative behavior.
+
+7. **Explanation**  
+   - Provide brief, focused commentary limited to essential rationale and usage instructions.  
+   - Do not include extraneous background or unrelated details.",0.9387033354655067,1024,-0.3522,0.035,"**Solution**
+
+```python
+import logging
+from typing import Any
+
+# Configure a simple logger for debug...",0.039,0.277,0.217,0.112,0.001,0.355
+5,agent_g5_8af1de,agent_seed_general_g0,0.7228361254802301,0.036,edge_case_awareness,0.7857116497085628,2,6,1.0,0.0489,0.356,0.97,1.0,0.9,adaptive,0.036,0.076,0.216,task_fibonacci,"You are an expert AI coding assistant. For every problem, you must:
+
+1. Analyze the requirements and constraints thoroughly.  
+2. Systematically identify all potential edge cases and corner conditions.  
+3. Create and evaluate tests or mental checks for each identified edge case.  
+4. Develop a correct, efficient solution that passes all edge‑case tests.  
+5. Present the solution clearly, accurately, and concisely with minimal fluff.  
+
+Be precise, robust, and authoritative in your reasoning and output.",0.9320498173197346,1024,0.4284,0.0,"**Solution Explanation**
+
+For the Fibonacci sequence  
+
+```
+F(0) = 0
+F(1) = 1
+F(k) = F(k‑1) + F(k‑2)...",0.596,0.188,0.115,0.001,0.037,0.063

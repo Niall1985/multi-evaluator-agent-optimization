@@ -9,7 +9,8 @@ from evaluation.pool import EvaluatorPool
 from optimization.bayesian_weights import BayesianWeightOptimizer
 from optimization.scoring import calculate_cost_penalized_fitness, calculate_relative_improvement
 from optimization.joint_sampler import JointSearchSampler
-from tasks.benchmark_tasks import BENCHMARK_TASKS, BenchmarkTask, get_random_task
+from tasks.benchmark_tasks import BENCHMARK_TASKS, BenchmarkTask, get_random_task, get_benchmark_task
+from core.agent import Agent, HarnessKnobs, AGENT_ARCHETYPES
 
 logger = logging.getLogger(__name__)
 
@@ -23,15 +24,21 @@ class EvolutionController:
         model: str = "openai/gpt-oss-120b",
         lambda_penalty: float = 0.5,
         default_strategy: str = "adaptive",
+        initial_archetype: str = "General Balanced Assistant",
+        selected_task_id: Optional[str] = None,
+        inter_call_delay: float = 1.5,
     ):
         self.api_key = api_key
         self.model = model
         self.lambda_penalty = lambda_penalty
         self.default_strategy = default_strategy
+        self.initial_archetype = initial_archetype
+        self.selected_task_id = selected_task_id
+        self.inter_call_delay = inter_call_delay
         self.csv_filepath = "optimization_results.csv"
 
         # Core components
-        self.llm_client = GroqLLMClient(api_key=api_key, model=model)
+        self.llm_client = GroqLLMClient(api_key=api_key, model=model, inter_call_delay=inter_call_delay)
         self.evaluator_pool = EvaluatorPool(llm_client=self.llm_client)
         self.metric_names = self.evaluator_pool.get_evaluator_names()
         self.bayesian_optimizer = BayesianWeightOptimizer(metric_names=self.metric_names)
@@ -49,10 +56,14 @@ class EvolutionController:
         self.history_records: List[Dict[str, Any]] = []
 
         # Initialize seed population
-        self.initialize_seed()
+        self.initialize_seed(archetype_name=self.initial_archetype, task_id=self.selected_task_id)
 
-    def reset(self):
+    def reset(self, initial_archetype: Optional[str] = None, selected_task_id: Optional[str] = None):
         """Resets the controller state, archive, and optimizer."""
+        if initial_archetype:
+            self.initial_archetype = initial_archetype
+        if selected_task_id is not None:
+            self.selected_task_id = selected_task_id
         self.archive = PopulationArchive()
         self.bayesian_optimizer = BayesianWeightOptimizer(metric_names=self.metric_names)
         self.sampler = JointSearchSampler(
@@ -63,29 +74,43 @@ class EvolutionController:
         self.cumulative_adaptive_cost = 0.0
         self.cumulative_naive_cost = 0.0
         self.history_records = []
-        self.initialize_seed()
+        self.initialize_seed(archetype_name=self.initial_archetype, task_id=self.selected_task_id)
 
-    def initialize_seed(self, seed_prompt: Optional[str] = None):
-        """Creates and evaluates the generation 0 seed baseline agent."""
+    def initialize_seed(
+        self,
+        archetype_name: Optional[str] = None,
+        task_id: Optional[str] = None,
+        seed_prompt: Optional[str] = None,
+    ):
+        """Creates and evaluates the generation 0 seed baseline agent using selected archetype."""
+        arch_name = archetype_name or self.initial_archetype
+        arch_info = AGENT_ARCHETYPES.get(arch_name, AGENT_ARCHETYPES["General Balanced Assistant"])
+
+        prompt = seed_prompt or arch_info["system_prompt"]
+        knobs = arch_info["harness_knobs"]
+        id_suffix = arch_info.get("id_suffix", "seed")
+
         seed_agent = Agent(
-            id="agent_seed_g0",
+            id=f"agent_seed_{id_suffix}_g0",
             parent_id=None,
             generation=0,
-            system_prompt=seed_prompt or (
-                "You are an expert, precise, and robust AI coding assistant. "
-                "Solve the given problem clearly, accurately, and efficiently with minimal fluff."
+            system_prompt=prompt,
+            harness_knobs=HarnessKnobs(
+                temperature=knobs.temperature,
+                max_retries=knobs.max_retries,
+                top_p=knobs.top_p,
+                max_tokens=knobs.max_tokens,
             ),
-            harness_knobs=HarnessKnobs(temperature=0.7, max_retries=2, top_p=0.95),
-            mutation_type="seed",
-            mutation_description="Initial seed candidate",
+            mutation_type=f"seed_{id_suffix}",
+            mutation_description=f"Initial seed archetype: {arch_name}",
         )
 
         # Baseline uniform weights for seed
         uniform_weights = {name: 1.0 / len(self.metric_names) for name in self.metric_names}
         full_subset = self.evaluator_pool.get_evaluator_names()
 
-        # Evaluate seed agent across benchmarks
-        benchmark = BENCHMARK_TASKS[0]
+        # Evaluate seed agent across benchmark
+        benchmark = self._resolve_task(task_id)
         exec_start = time.time()
         agent_solution = self._execute_agent_on_task(seed_agent, benchmark)
         exec_time_ms = (time.time() - exec_start) * 1000
@@ -120,11 +145,20 @@ class EvolutionController:
                 "naive_cost_spent": self.evaluator_pool.get_full_eval_cost(),
                 "cumulative_adaptive_cost": self.cumulative_adaptive_cost,
                 "cumulative_naive_cost": self.cumulative_naive_cost,
+                "task_id": benchmark.id,
             },
         )
         self.archive.export_to_csv(self.csv_filepath)
 
-    def run_generation(self, strategy: Optional[str] = None) -> Dict[str, Any]:
+    def _resolve_task(self, task_param: Optional[str] = None) -> BenchmarkTask:
+        target = task_param or self.selected_task_id
+        if target and target != "All Benchmark Tasks (Suite / Random)":
+            found = get_benchmark_task(target)
+            if found:
+                return found
+        return get_random_task()
+
+    def run_generation(self, strategy: Optional[str] = None, task_id: Optional[str] = None) -> Dict[str, Any]:
         """Runs a single generation step of the multi-objective optimization loop."""
         self.current_generation += 1
         active_strategy = strategy or self.default_strategy
@@ -144,7 +178,7 @@ class EvolutionController:
             weights = self.sampler.sample_weights()
 
         # 4. Select Benchmark Task
-        task = get_random_task()
+        task = self._resolve_task(task_id)
         task_dict = self._task_to_dict(task)
 
         # 5. Execute Agent on Task
