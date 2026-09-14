@@ -9,6 +9,7 @@ from plotly.subplots import make_subplots
 from controller import EvolutionController
 from core.agent import AGENT_ARCHETYPES
 from tasks.benchmark_tasks import BENCHMARK_TASKS
+from benchmarks.arc_challenge import ARC_TASKS
 
 # ---------------------------------------------------------
 # Environment Configuration
@@ -162,7 +163,7 @@ with st.sidebar:
     st.markdown("---")
     st.markdown("### Selectable Benchmark Task")
 
-    task_choices = ["All Benchmark Tasks (Suite / Random)"] + [t.name for t in BENCHMARK_TASKS]
+    task_choices = ["All Benchmark Tasks (Suite / Random)"] + [t.name for t in BENCHMARK_TASKS] + [t.name for t in ARC_TASKS]
     current_task_idx = 0
     if ctrl.selected_task_id:
         for idx, t_name in enumerate(task_choices):
@@ -174,12 +175,12 @@ with st.sidebar:
         "Benchmark Problem / Task Input",
         options=task_choices,
         index=current_task_idx,
-        help="Select a specific coding/reasoning problem (e.g. Stock Exchange, Fibonacci, Interval Merge) or test across the full suite.",
+        help="Select a specific coding/reasoning problem (e.g. Stock Exchange, Fibonacci, or an ARC-AGI grid puzzle) or test across the full suite.",
     )
     ctrl.selected_task_id = None if selected_task_name == "All Benchmark Tasks (Suite / Random)" else selected_task_name
     
     if selected_task_name != "All Benchmark Tasks (Suite / Random)":
-        matched_task = next((t for t in BENCHMARK_TASKS if t.name == selected_task_name), None)
+        matched_task = next((t for t in BENCHMARK_TASKS + ARC_TASKS if t.name == selected_task_name), None)
         if matched_task:
             st.caption(f"**Category:** {matched_task.category}\n\n**Goal:** {matched_task.description[:120]}...")
 

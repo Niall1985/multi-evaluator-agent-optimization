@@ -76,6 +76,12 @@ class CodeExecutionRunner:
     @staticmethod
     def _are_values_equal(actual: Any, expected: Any) -> bool:
         """Checks equality with float tolerance if applicable."""
+        # Grid-style outputs (ARC tasks) may come back as numpy arrays; `==` on arrays is
+        # element-wise and ambiguous in a bool context, so normalise to nested lists first.
+        if hasattr(actual, "tolist"):
+            actual = actual.tolist()
+        if hasattr(expected, "tolist"):
+            expected = expected.tolist()
         if isinstance(actual, float) and isinstance(expected, float):
             return math.isclose(actual, expected, rel_tol=1e-5, abs_tol=1e-5)
         return actual == expected

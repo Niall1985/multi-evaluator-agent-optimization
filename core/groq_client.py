@@ -160,6 +160,11 @@ class GroqLLMClient:
                 )
 
         # 3. Check for Benchmark Task Execution (Specific matches first)
+        # ARC-AGI grid tasks (benchmarks/arc_challenge) - matched before generic keywords
+        # like "target" so grid prompts never fall into the coding-task branches.
+        if "arc-agi task" in lower_user:
+            return self._mock_arc_solution(lower_user)
+
         if "parenthes" in lower_user or "bracket" in lower_user or "task_valid_parentheses" in lower_user:
             return (
                 "```python\n"
@@ -256,3 +261,40 @@ class GroqLLMClient:
                 "    return True\n"
                 "```"
             )
+
+    @staticmethod
+    def _mock_arc_solution(lower_user: str) -> str:
+        """Deterministic solutions for the bundled ARC-AGI tasks (offline demo mode)."""
+        if "arc-agi task 00576224" in lower_user:
+            body = (
+                "def solve(grid):\n"
+                "    flipped = [row[::-1] for row in grid]\n"
+                "    out = []\n"
+                "    for block in (grid, flipped, grid):\n"
+                "        for row in block:\n"
+                "            out.append(row * 3)\n"
+                "    return out\n"
+            )
+        elif "arc-agi task 25ff71a9" in lower_user:
+            body = (
+                "def solve(grid):\n"
+                "    width = len(grid[0])\n"
+                "    return [[0] * width] + [list(row) for row in grid[:-1]]\n"
+            )
+        elif "arc-agi task 3c9b0459" in lower_user:
+            body = (
+                "def solve(grid):\n"
+                "    return [row[::-1] for row in grid[::-1]]\n"
+            )
+        elif "arc-agi task c8f0f002" in lower_user:
+            body = (
+                "def solve(grid):\n"
+                "    return [[5 if v == 7 else v for v in row] for row in grid]\n"
+            )
+        else:
+            # Unknown ARC task: identity transform (valid grid, will not pass).
+            body = (
+                "def solve(grid):\n"
+                "    return [list(row) for row in grid]\n"
+            )
+        return "```python\n" + body + "```"
