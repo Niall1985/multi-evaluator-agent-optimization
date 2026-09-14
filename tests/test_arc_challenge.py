@@ -244,3 +244,99 @@ class TestArcChallengeBenchmark(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestArcVisualisation(unittest.TestCase):
+    """Plotly figures / tables for ARC results and the Streamlit ARC flow."""
+
+    def test_gallery_figure_layout_and_orientation(self):
+        from benchmarks.arc_challenge import ARC_PALETTE, task_gallery_figure
+        from benchmarks.arc_challenge.viz import ARC_COLORSCALE
+
+        task = get_arc_task("c8f0f002")  # 3 train + 1 test, non-square grids
+        prog = "def solve(grid):\n    return [[5 if v == 7 else v for v in row] for row in grid[:-1]] + [list(grid[-1])]\n"
+        fig = task_gallery_figure(task, prog)
+        n_rows = len(task.test_cases) + len(task.edge_cases)
+        self.assertEqual(len(fig.data), n_rows * 3)  # Input | Expected | Predicted per pair
+
+        # Heatmap rows are reversed so grid row 0 is drawn on top (plotly's y points up)
+        first_input = task.test_cases[0]["args"][0]
+        z = [list(r) for r in fig.data[0].z]
+        self.assertEqual(z, first_input[::-1])
+        self.assertEqual(fig.data[0].customdata[-1][0], 0)  # top plotted row labelled as row 0
+        self.assertEqual(len(ARC_PALETTE), 10)
+        self.assertEqual(len(ARC_COLORSCALE), 20)
+        self.assertEqual(fig.data[0].zmin, -0.5)
+        self.assertEqual(fig.data[0].zmax, 9.5)
+
+        titles = [a.text for a in fig.layout.annotations]
+        self.assertEqual(len(titles), n_rows * 3)
+        self.assertIn("Held-out 1 — Input", titles)
+        predicted_titles = titles[2::3]
+        self.assertTrue(all("✗" in t and "% px" in t for t in predicted_titles), predicted_titles)
+
+        # Exact solution -> ticks; second attempt shown when only it is right
+        two = (
+            "def transform_grid_attempt_1(grid):\n    return grid\n"
+            "def transform_grid_attempt_2(grid):\n    return [[5 if v == 7 else v for v in row] for row in grid]\n"
+        )
+        fig2 = task_gallery_figure(task, two)
+        self.assertTrue(all("✓" in a.text for a in fig2.layout.annotations[2::3]))
+        expected0 = task.test_cases[0]["expected"]
+        self.assertEqual([list(r) for r in fig2.data[2].z], expected0[::-1])
+
+        # Broken program still yields a figure with placeholder predicted cells
+        fig3 = task_gallery_figure(task, "x = (")
+        self.assertEqual(len(fig3.data), n_rows * 3)
+        self.assertTrue(all("no grid" in a.text for a in fig3.layout.annotations[2::3]))
+
+    def test_trajectory_and_summary(self):
+        from benchmarks.arc_challenge import benchmark_summary_frame, build_arc_evaluator_pool, pass_at_2_trajectory_figure
+
+        ctrl = EvolutionController(
+            is_mock=True, inter_call_delay=0.0, selected_task_id="arc_25ff71a9",
+            evaluator_pool_factory=build_arc_evaluator_pool,
+        )
+        ctrl.run_n_generations(2)
+        fig = pass_at_2_trajectory_figure(ctrl.history_records)
+        names = [tr.name for tr in fig.data]
+        self.assertTrue(any("held-out" in n for n in names))
+        self.assertTrue(any("AI-gen" in n for n in names))
+        self.assertEqual(sorted(set(tr.line.dash for tr in fig.data)), ["dash", "dot", "solid"])
+        # Records without ARC metrics produce an empty figure rather than an error
+        self.assertEqual(len(pass_at_2_trajectory_figure([{"generation": 0, "metrics": {"mu_1_correctness": 1.0}}]).data), 0)
+
+        df = benchmark_summary_frame(ctrl.archive.get_all_agents())
+        self.assertEqual(list(df["Task"]), ["arc_25ff71a9"])
+        self.assertEqual(df.loc[0, "arc_pass_at_2_test"], 1.0)
+        self.assertTrue(bool(df.loc[0, "Solved (official)"]))
+        self.assertTrue(benchmark_summary_frame([]).empty)
+
+    def test_streamlit_arc_flow(self):
+        from streamlit.testing.v1 import AppTest
+
+        os.environ.pop("GROQ_API_KEY", None)  # force mock mode
+        at = AppTest.from_file(os.path.join(os.path.dirname(__file__), "..", "app.py"), default_timeout=120)
+        at.run()
+        self.assertFalse(at.exception, at.exception)
+
+        # Switch to the ARC suite: sidebar tier captions and metric names follow the pool
+        at.sidebar.radio[0].set_value("ARC-AGI (3 real + 3 partial)").run()
+        self.assertFalse(at.exception, at.exception)
+        ctrl = at.session_state["controller"]
+        self.assertEqual(ctrl.metric_names[:3], ["arc_runs_successfully", "arc_pass_at_2_train", "arc_pass_at_2_test"])
+        self.assertTrue(any("arc_pass_at_2_test" in c.value for c in at.sidebar.caption))
+
+        task_box = next(s for s in at.sidebar.selectbox if "Benchmark Problem" in s.label)
+        task_box.set_value(next(o for o in task_box.options if o.startswith("ARC 00576224"))).run()
+        at.sidebar.button[0].click().run()  # Run 1 Gen
+        self.assertFalse(at.exception, at.exception)
+
+        ctrl = at.session_state["controller"]
+        self.assertEqual(ctrl.current_generation, 1)
+        self.assertEqual(ctrl.history_records[-1]["task_id"], "arc_00576224")
+        self.assertIn("Candidate to visualise", [s.label for s in at.selectbox])
+        shown = {m.label: m.value for m in at.metric}
+        self.assertEqual(shown.get("Pass@2 — held-out (official)"), "1.00")
+        self.assertEqual(at.error, [])
+        self.assertEqual(at.warning, [])

@@ -34,6 +34,12 @@ from .partial_evaluators import (
     ArcShapeMatchEvaluator,
 )
 from .pool import build_arc_evaluator_pool
+from .viz import (
+    ARC_PALETTE,
+    benchmark_summary_frame,
+    pass_at_2_trajectory_figure,
+    task_gallery_figure,
+)
 
 __all__ = [
     "ARC_DATA_ROOT",
@@ -62,4 +68,8 @@ __all__ = [
     "ArcPixelAccuracyEvaluator",
     "ArcShapeMatchEvaluator",
     "build_arc_evaluator_pool",
+    "ARC_PALETTE",
+    "benchmark_summary_frame",
+    "pass_at_2_trajectory_figure",
+    "task_gallery_figure",
 ]

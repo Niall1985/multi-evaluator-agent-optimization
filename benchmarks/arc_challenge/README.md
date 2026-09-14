@@ -54,6 +54,7 @@ benchmarks/arc_challenge/
 ├── evaluators.py            # 3 REAL evaluators: official ARC metrics
 ├── partial_evaluators.py    # 3 PARTIAL-CREDIT evaluators — AI-generated, marked by a 4-line header
 ├── pool.py                  # build_arc_evaluator_pool()
+├── viz.py                   # plotly grid gallery, score trajectory, per-task summary (used by app.py)
 └── README.md
 ```
 
@@ -94,6 +95,22 @@ Example on task `c8f0f002` (recolour 7→5) with a program that applies the rule
 
 The default `EvolutionController` still uses the 6 canonical μ evaluators (μ₁/μ₅ compare grids exactly, so ARC
 tasks work there too). Opt into the ARC suite with `evaluator_pool_factory`:
+
+## Visualisation (Streamlit)
+
+`streamlit run app.py` → sidebar **Evaluator Suite → ARC-AGI (3 real + 3 partial)**, pick an `ARC …` task, run
+generations, open the **ARC BENCHMARK: Grid Results** tab:
+
+- **Grid gallery** — one row per demonstration / held-out pair: Input | Expected | Predicted, drawn in the
+  official ARC colour palette. Titles show `✓ exact` or `✗ NN% px`; if only `transform_grid_attempt_2` is
+  correct, that attempt is shown so the pass@2 credit is visible.
+- **ARC scores over generations** — real metrics as solid lines, AI-generated partial-credit ones dashed.
+- **Best-so-far per ARC task** — pass@2 train/test, partial scores and an official `Solved` flag.
+
+The rest of the dashboard follows the active suite: tier captions, active-evaluator counts, GP target metric,
+activation heatmap and the Pareto scatter (axes become pass@2-train × pixel-accuracy). Switching suites rebuilds
+the controller, since the GP and archive are keyed on the metric set. The functions in `viz.py` are plain plotly
+(`task_gallery_figure`, `pass_at_2_trajectory_figure`, `benchmark_summary_frame`) and work outside Streamlit.
 
 ## Usage
 
