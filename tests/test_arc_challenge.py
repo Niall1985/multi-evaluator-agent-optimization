@@ -9,15 +9,28 @@ import numpy as np
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from benchmarks.arc_challenge import (
+    AI_GENERATED_HEADER,
     ARC_TASKS,
-    ARC_TASKS_DIR,
+    DEFAULT_DATA_ROOT,
+    PARTIAL_ARC_EVALUATORS,
+    REAL_ARC_EVALUATORS,
+    ArcColorPaletteEvaluator,
+    ArcHeldOutPassAt2Evaluator,
+    ArcPassAt2Evaluator,
+    ArcPixelAccuracyEvaluator,
+    ArcRunsSuccessfullyEvaluator,
+    ArcShapeMatchEvaluator,
     arc_task_to_benchmark,
+    available_splits,
+    build_arc_evaluator_pool,
     get_arc_task,
+    load_arc_tasks,
     load_kaggle_split,
     pass_at_2_single,
     pixel_accuracy,
     score_arc_program,
 )
+from controller import EvolutionController
 from core.groq_client import GroqLLMClient
 from evaluation.runner import CodeExecutionRunner
 from tasks.benchmark_tasks import BENCHMARK_TASKS, get_benchmark_task
@@ -29,19 +42,37 @@ class TestArcChallengeBenchmark(unittest.TestCase):
     def setUp(self):
         self.llm_client = GroqLLMClient(is_mock=True, model="openai/gpt-oss-120b")
 
-    def test_bundled_tasks_load_with_correct_mapping(self):
-        self.assertEqual(len(ARC_TASKS), len(list(ARC_TASKS_DIR.glob("*.json"))))
+    @staticmethod
+    def _raw(split):
+        root = DEFAULT_DATA_ROOT
+        challenges = json.load(open(root / f"arc-agi_{split}_challenges.json"))
+        solutions = json.load(open(root / f"arc-agi_{split}_solutions.json"))
+        return challenges, solutions
+
+    def test_bundled_split_files_load_with_correct_mapping(self):
+        # Kaggle / OpenEvolve layout: arc-agi_{split}_challenges.json + arc-agi_{split}_solutions.json
+        self.assertEqual(available_splits(DEFAULT_DATA_ROOT), ["training", "evaluation"])
+        raw = {}
+        for split in available_splits(DEFAULT_DATA_ROOT):
+            challenges, solutions = self._raw(split)
+            self.assertEqual(set(challenges), set(solutions))
+            for tid, ch in challenges.items():
+                for pair in ch["test"]:
+                    self.assertNotIn("output", pair)  # test outputs live only in the solutions file
+                raw[tid] = (ch, solutions[tid])
+        self.assertEqual(len(ARC_TASKS), len(raw))
         self.assertGreaterEqual(len(ARC_TASKS), 4)
         for task in ARC_TASKS:
-            with open(ARC_TASKS_DIR / f"{task.id.removeprefix('arc_')}.json") as f:
-                raw = json.load(f)
+            ch, sol = raw[task.id.removeprefix("arc_")]
             self.assertTrue(task.id.startswith("arc_"))
             self.assertEqual(task.entry_point, "solve")
-            # train pairs -> test_cases, test pairs -> edge_cases
-            self.assertEqual(len(task.test_cases), len(raw["train"]))
-            self.assertEqual(len(task.edge_cases), len(raw["test"]))
-            self.assertEqual(task.test_cases[0]["args"][0], raw["train"][0]["input"])
-            self.assertEqual(task.test_cases[0]["expected"], raw["train"][0]["output"])
+            # train pairs -> test_cases, test inputs + solutions -> edge_cases
+            self.assertEqual(len(task.test_cases), len(ch["train"]))
+            self.assertEqual(len(task.edge_cases), len(sol))
+            self.assertEqual(task.test_cases[0]["args"][0], ch["train"][0]["input"])
+            self.assertEqual(task.test_cases[0]["expected"], ch["train"][0]["output"])
+            self.assertEqual(task.edge_cases[0]["args"][0], ch["test"][0]["input"])
+            self.assertEqual(task.edge_cases[0]["expected"], sol[0])
             self.assertIn("ARC-AGI task", task.description)
             # Prompt must not trip the mock client's coding-task keyword branches
             for kw in ("target", "differ", "stock", "fib", "bracket", "parenthes"):
@@ -106,21 +137,109 @@ class TestArcChallengeBenchmark(unittest.TestCase):
         self.assertIn("errors", broken)
         self.assertEqual(score_arc_program(task, "x = (")["runs_successfully"], 0.0)
 
-    def test_kaggle_split_loader_merges_solutions(self):
-        raw = json.load(open(ARC_TASKS_DIR / "c8f0f002.json"))
-        challenges = {"c8f0f002": {"train": raw["train"], "test": [{"input": raw["test"][0]["input"]}]}}
-        solutions = {"c8f0f002": [raw["test"][0]["output"]]}
+    def test_split_loader_limit_order_and_missing_solutions(self):
+        challenges, solutions = self._raw("training")
         with tempfile.TemporaryDirectory() as d:
-            json.dump(challenges, open(os.path.join(d, "arc-agi_evaluation_challenges.json"), "w"))
-            json.dump(solutions, open(os.path.join(d, "arc-agi_evaluation_solutions.json"), "w"))
-            tasks = load_kaggle_split(d, "evaluation")
-        self.assertEqual(len(tasks), 1)
-        self.assertEqual(tasks[0].edge_cases[0]["expected"], raw["test"][0]["output"])
+            json.dump(challenges, open(os.path.join(d, "arc-agi_test_challenges.json"), "w"))
+            # No solutions file: like the Kaggle hidden test split -> no scorable held-out pairs
+            tasks = load_kaggle_split(d, "test")
+            self.assertEqual([t.id for t in tasks], [f"arc_{k}" for k in challenges])  # order preserved
+            self.assertTrue(all(t.edge_cases == [] for t in tasks))
+            self.assertTrue(all(len(t.test_cases) == len(challenges[t.id[4:]]["train"]) for t in tasks))
+            self.assertEqual(len(load_kaggle_split(d, "test", limit=2)), 2)
+            self.assertEqual(available_splits(d), ["test"])
+            self.assertEqual(len(load_arc_tasks(d)), len(challenges))
 
-        # Without solutions, unscorable test pairs are dropped from edge_cases
-        t = arc_task_to_benchmark("x", {"train": raw["train"], "test": [{"input": [[1]]}]})
+        # Solutions merged in, and an unscorable test pair without a solution is dropped
+        tid = next(iter(challenges))
+        t = arc_task_to_benchmark(tid, challenges[tid], test_solutions=solutions[tid])
+        self.assertEqual([c["expected"] for c in t.edge_cases], solutions[tid])
+        t = arc_task_to_benchmark("x", {"train": challenges[tid]["train"], "test": [{"input": [[1]]}]})
         self.assertEqual(t.edge_cases, [])
-        self.assertEqual(len(t.test_cases), 3)
+
+    # ------------------------------------------------------------------ evaluators
+
+    def test_real_evaluators_report_official_metrics(self):
+        task = get_arc_task("25ff71a9")
+        d = {"entry_point": "solve", "test_cases": task.test_cases, "edge_cases": task.edge_cases}
+        good = self.llm_client.generate("You are a coding agent.", task.description)
+        wrong = "def solve(grid):\n    return [list(r) for r in grid]\n"
+        crash = "def solve(grid):\n    return grid[99]\n"
+
+        for E in REAL_ARC_EVALUATORS:
+            self.assertEqual(E().evaluate(None, d, good).score, 1.0, E.__name__)
+        self.assertEqual(ArcPassAt2Evaluator().evaluate(None, d, wrong).score, 0.0)
+        self.assertEqual(ArcHeldOutPassAt2Evaluator().evaluate(None, d, wrong).score, 0.0)
+        self.assertEqual(ArcRunsSuccessfullyEvaluator().evaluate(None, d, wrong).score, 1.0)  # runs, just wrong
+        self.assertEqual(ArcRunsSuccessfullyEvaluator().evaluate(None, d, crash).score, 0.0)
+        self.assertEqual(ArcRunsSuccessfullyEvaluator().evaluate(None, d, "x = (").score, 0.0)
+
+        # pass@2: second attempt rescues the first
+        two = (
+            "def transform_grid_attempt_1(grid):\n    return grid\n"
+            "def transform_grid_attempt_2(grid):\n    return [[0] * len(grid[0])] + [list(r) for r in grid[:-1]]\n"
+        )
+        res = ArcHeldOutPassAt2Evaluator().evaluate(None, d, two)
+        self.assertEqual(res.score, 1.0)
+        self.assertFalse(res.details["test_example_0_attempt_0"])
+        self.assertTrue(res.details["test_example_0_attempt_1"])
+        self.assertNotIn("outputs", res.details)
+
+    def test_partial_evaluators_give_gradient_below_exact_match(self):
+        task = get_arc_task("c8f0f002")  # recolour 7 -> 5
+        d = {"entry_point": "solve", "test_cases": task.test_cases, "edge_cases": task.edge_cases}
+        # Correct rule applied to every row except the last one: wrong, but close
+        close = (
+            "def solve(grid):\n"
+            "    return [[5 if v == 7 else v for v in row] for row in grid[:-1]] + [list(grid[-1])]\n"
+        )
+        self.assertEqual(ArcPassAt2Evaluator().evaluate(None, d, close).score, 0.0)
+        pix = ArcPixelAccuracyEvaluator().evaluate(None, d, close)
+        self.assertTrue(0.5 < pix.score < 1.0, pix.score)
+        self.assertTrue(pix.details["ai_generated"])
+        self.assertEqual(ArcShapeMatchEvaluator().evaluate(None, d, close).score, 1.0)
+        self.assertTrue(0.5 < ArcColorPaletteEvaluator().evaluate(None, d, close).score < 1.0)
+
+        # Wrong shape: pixel/shape collapse to 0, palette (shape-agnostic) stays > 0
+        transposed = "def solve(grid):\n    return [list(c) for c in zip(*grid)]\n"
+        self.assertEqual(ArcShapeMatchEvaluator().evaluate(None, d, transposed).score, 0.0)
+        self.assertEqual(ArcPixelAccuracyEvaluator().evaluate(None, d, transposed).score, 0.0)
+        self.assertGreater(ArcColorPaletteEvaluator().evaluate(None, d, transposed).score, 0.0)
+        # Broken program: everything 0
+        for E in PARTIAL_ARC_EVALUATORS:
+            self.assertEqual(E().evaluate(None, d, "x = (").score, 0.0)
+
+    def test_partial_evaluators_are_marked_ai_generated(self):
+        src_path = os.path.join(os.path.dirname(__file__), "..", "benchmarks", "arc_challenge", "partial_evaluators.py")
+        with open(src_path) as f:
+            head = [next(f).rstrip("\n") for _ in range(4)]
+        # The constant is the literal 4-line header at the top of the file
+        self.assertEqual([h.removeprefix("# ") for h in head], AI_GENERATED_HEADER.split("\n"))
+        self.assertEqual(len(AI_GENERATED_HEADER.split("\n")), 4)
+        self.assertIn("AI-GENERATED", AI_GENERATED_HEADER)
+
+    def test_arc_pool_and_controller_factory(self):
+        pool = build_arc_evaluator_pool(self.llm_client)
+        self.assertEqual(
+            pool.get_evaluator_names(),
+            ["arc_runs_successfully", "arc_pass_at_2_train", "arc_pass_at_2_test",
+             "arc_pixel_accuracy", "arc_shape_match", "arc_color_palette"],
+        )
+        self.assertEqual(len(pool.get_evaluators_by_tier("core")), 4)
+        self.assertEqual(len(pool.get_evaluators_by_tier("deep")), 2)
+        self.assertEqual(len(build_arc_evaluator_pool(self.llm_client, include_partial=False).evaluators), 3)
+        self.assertEqual(len(build_arc_evaluator_pool(self.llm_client, include_llm_judges=True).evaluators), 8)
+
+        ctrl = EvolutionController(
+            is_mock=True, inter_call_delay=0.0, selected_task_id="arc_3c9b0459",
+            evaluator_pool_factory=build_arc_evaluator_pool,
+        )
+        self.assertEqual(ctrl.metric_names, pool.get_evaluator_names())
+        rec = ctrl.run_generation(strategy="full_adaptive")
+        self.assertEqual(rec["task_id"], "arc_3c9b0459")
+        self.assertEqual(rec["metrics"]["arc_pass_at_2_train"], 1.0)
+        self.assertTrue(set(rec["metrics"]) <= set(pool.get_evaluator_names()))
+        self.assertIn("arc_pass_at_2_train", ctrl.archive.to_detailed_dataframe().columns)
 
 
 if __name__ == "__main__":

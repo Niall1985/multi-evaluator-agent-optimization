@@ -1,12 +1,17 @@
 """
 Loads ARC-AGI tasks and adapts them to the project's BenchmarkTask structure.
 
-ARC task JSON (fchollet/ARC-AGI, arcprize/ARC-AGI-2, Kaggle arc-prize-20xx):
-    {
-        "train": [{"input": Grid, "output": Grid}, ...],   # demonstration pairs
-        "test":  [{"input": Grid, "output": Grid}, ...]    # held-out pairs
-    }
+Data layout (Kaggle arc-prize-20xx / OpenEvolve arc_benchmark): one pair of
+multi-task files per split under a data root:
+
+    arc-agi_{split}_challenges.json  {task_id: {"train": [{input, output}, ...],
+                                                "test":  [{input}, ...]}}
+    arc-agi_{split}_solutions.json   {task_id: [output_grid, ...]}   # test outputs
+
 A Grid is a rectangular list-of-lists of ints 0-9, from 1x1 up to 30x30.
+The bundled root `benchmarks/arc_challenge/data/` holds a small sample in this
+exact layout; point ARC_DATA_ROOT at a full Kaggle download to use all tasks and
+ARC_TASK_FILE at a single split (training | evaluation | test) to restrict it.
 
 Mapping onto BenchmarkTask:
     train pairs -> test_cases  (mu_1 Functional Correctness: fit the demonstrations)
@@ -17,14 +22,17 @@ Mapping onto BenchmarkTask:
 import json
 import os
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 
 from tasks.benchmark_tasks import BenchmarkTask
 
 Grid = List[List[int]]
 
-ARC_TASKS_DIR = Path(__file__).parent / "tasks"
 ARC_ID_PREFIX = "arc_"
+ARC_SPLITS = ("training", "evaluation", "test")
+DEFAULT_DATA_ROOT = Path(__file__).parent / "data"
+ARC_DATA_ROOT = Path(os.environ.get("ARC_DATA_ROOT", DEFAULT_DATA_ROOT))
+ARC_TASK_FILE: Optional[str] = os.environ.get("ARC_TASK_FILE") or None  # None = every split present
 
 # Human-readable labels for the bundled tasks (ARC-AGI-1 public data).
 ARC_TASK_LABELS: Dict[str, str] = {
@@ -120,22 +128,15 @@ def load_arc_task_file(path: os.PathLike, source: str = "arc-agi-1") -> Benchmar
     return arc_task_to_benchmark(path.stem, data, source=source)
 
 
-def load_bundled_arc_tasks(tasks_dir: os.PathLike = ARC_TASKS_DIR) -> List[BenchmarkTask]:
-    """Loads every task JSON shipped in benchmarks/arc_challenge/tasks/."""
-    tasks_dir = Path(tasks_dir)
-    return [load_arc_task_file(p) for p in sorted(tasks_dir.glob("*.json"))]
-
-
 def load_kaggle_split(
     data_root: os.PathLike,
     split: str = "evaluation",
     limit: Optional[int] = None,
 ) -> List[BenchmarkTask]:
-    """Loads a Kaggle arc-prize split (same layout OpenEvolve's example uses).
+    """Loads one split from `arc-agi_{split}_challenges.json` (+ optional `_solutions.json`).
 
-    Expects `arc-agi_{split}_challenges.json` and, optionally,
-    `arc-agi_{split}_solutions.json` under `data_root`. Task order follows the
-    challenges file, matching the numbering on https://arcprize.org/tasks/.
+    Task order follows the challenges file, matching the numbering on
+    https://arcprize.org/tasks/ (and OpenEvolve's TASK_NUM index).
     """
     data_root = Path(data_root)
     with open(data_root / f"arc-agi_{split}_challenges.json", "r", encoding="utf-8") as f:
@@ -155,11 +156,31 @@ def load_kaggle_split(
     return tasks
 
 
-ARC_TASKS: List[BenchmarkTask] = load_bundled_arc_tasks()
+def available_splits(data_root: os.PathLike = ARC_DATA_ROOT) -> List[str]:
+    """Splits for which a challenges file exists under data_root, in canonical order."""
+    root = Path(data_root)
+    return [s for s in ARC_SPLITS if (root / f"arc-agi_{s}_challenges.json").exists()]
+
+
+def load_arc_tasks(
+    data_root: os.PathLike = ARC_DATA_ROOT,
+    splits: Optional[Sequence[str]] = None,
+    limit: Optional[int] = None,
+) -> List[BenchmarkTask]:
+    """Loads every task from the given splits (default: all splits present under data_root)."""
+    tasks: List[BenchmarkTask] = []
+    for split in splits or available_splits(data_root):
+        tasks.extend(load_kaggle_split(data_root, split, limit=limit))
+    return tasks
+
+
+ARC_TASKS: List[BenchmarkTask] = load_arc_tasks(
+    ARC_DATA_ROOT, splits=[ARC_TASK_FILE] if ARC_TASK_FILE else None
+)
 
 
 def get_arc_task(task_id: str) -> Optional[BenchmarkTask]:
-    """Looks up a bundled ARC task by BenchmarkTask id, raw ARC id, or display name."""
+    """Looks up a loaded ARC task by BenchmarkTask id, raw ARC id, or display name."""
     for t in ARC_TASKS:
         if task_id in (t.id, t.name) or t.id == f"{ARC_ID_PREFIX}{task_id}":
             return t

@@ -1,6 +1,6 @@
 import time
 import logging
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Callable
 from core.agent import Agent, HarnessKnobs, AGENT_ARCHETYPES
 from core.archive import PopulationArchive
 from core.groq_client import GroqLLMClient
@@ -28,6 +28,7 @@ class EvolutionController:
         selected_task_id: Optional[str] = None,
         inter_call_delay: float = 1.5,
         is_mock: Optional[bool] = None,
+        evaluator_pool_factory: Optional[Callable[[GroqLLMClient], EvaluatorPool]] = None,
     ):
         self.api_key = api_key
         self.model = model
@@ -46,7 +47,11 @@ class EvolutionController:
             inter_call_delay=inter_call_delay,
             is_mock=is_mock,
         )
-        self.evaluator_pool = EvaluatorPool(llm_client=self.llm_client)
+        # Default: the 6 canonical mu evaluators. A factory swaps in a benchmark-specific suite
+        # (e.g. benchmarks.arc_challenge.build_arc_evaluator_pool).
+        self.evaluator_pool = (
+            evaluator_pool_factory(self.llm_client) if evaluator_pool_factory else EvaluatorPool(llm_client=self.llm_client)
+        )
         self.metric_names = self.evaluator_pool.get_evaluator_names()
         self.bayesian_optimizer = BayesianWeightOptimizer(metric_names=self.metric_names)
         self.mutator = PromptMutator(llm_client=self.llm_client)

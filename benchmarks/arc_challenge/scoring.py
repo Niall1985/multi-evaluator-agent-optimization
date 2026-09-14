@@ -4,9 +4,9 @@ up to 2 attempts per test input => pass@2) and the metrics layout used by
 OpenEvolve's arc_benchmark evaluator (`combined_score`, `runs_successfully`,
 `<example>_pass_at_2`, `<example>_attempt_<n>`).
 
-The default project pipeline scores a single `solve()` via CodeExecutionRunner.
-`score_arc_program` is the optional pass@2 path: it accepts programs exposing
-`transform_grid_attempt_1/2` (OpenEvolve seed style) or a lone `solve`.
+`score_arc_cases` / `score_arc_program` accept programs exposing
+`transform_grid_attempt_1/2` (OpenEvolve seed style) or a lone `solve`, and back
+the evaluators in `evaluators.py` (official metrics) and `partial_evaluators.py`.
 """
 
 from typing import Any, Dict, List, Optional, Sequence
@@ -66,39 +66,42 @@ def pass_at_2_multi(attempts_per_example: Sequence[Sequence[Any]], truths: Seque
     return sum(pass_at_2_single(a, t) for a, t in zip(attempts_per_example, truths)) / len(truths)
 
 
-def score_arc_program(
-    task: BenchmarkTask,
-    agent_output: str,
-    use_held_out: bool = False,
-) -> Dict[str, Any]:
-    """Runs a candidate program with pass@2 semantics and returns OpenEvolve-style metrics.
-
-    Uses `transform_grid_attempt_1/2` when present, otherwise `solve` is treated
-    as attempt 0 only. `use_held_out=False` scores the demonstration (train)
-    pairs; `True` scores the held-out (test) pairs.
-    """
+def _load_attempt_functions(agent_output: str, entry_point: str = "solve"):
+    """Execs candidate code; returns (attempt_fns, error). Prefers OpenEvolve's two attempts, else `solve`."""
     code = CodeExecutionRunner.extract_code(agent_output)
     namespace: Dict[str, Any] = {}
     try:
         exec(code, namespace)
     except Exception as e:  # noqa: BLE001 - candidate code is untrusted
-        return {"runs_successfully": 0.0, "combined_score": 0.0, "error": f"{type(e).__name__}: {e}"}
-
+        return [], f"{type(e).__name__}: {e}"
     fns = [namespace[n] for n in ATTEMPT_FUNCTIONS if callable(namespace.get(n))]
-    if not fns and callable(namespace.get(task.entry_point)):
-        fns = [namespace[task.entry_point]]
+    if not fns and callable(namespace.get(entry_point)):
+        fns = [namespace[entry_point]]
     if not fns:
-        return {
-            "runs_successfully": 0.0,
-            "combined_score": 0.0,
-            "error": f"No `{task.entry_point}` or {ATTEMPT_FUNCTIONS} found.",
-        }
+        return [], f"No `{entry_point}` or {ATTEMPT_FUNCTIONS} found."
+    return fns, None
 
-    cases = task.edge_cases if use_held_out else task.test_cases
-    prefix = "test_example" if use_held_out else "train_example"
+
+def score_arc_cases(
+    cases: Sequence[Dict[str, Any]],
+    agent_output: str,
+    entry_point: str = "solve",
+    prefix: str = "train_example",
+) -> Dict[str, Any]:
+    """Pass@2-scores `cases` ([{"args": (grid,), "expected": grid}, ...]) with OpenEvolve-style keys.
+
+    Always includes `runs_successfully` and `combined_score` (mean pass@2); per example
+    `{prefix}_{i}_pass_at_2`, `{prefix}_{i}_attempt_{j}` and `..._pixel_acc`. Raw attempt
+    outputs are returned under `outputs` for partial-credit evaluators to reuse.
+    """
+    fns, err = _load_attempt_functions(agent_output, entry_point)
+    if err:
+        return {"runs_successfully": 0.0, "combined_score": 0.0, "error": err, "outputs": []}
+
     metrics: Dict[str, Any] = {"runs_successfully": 1.0}
     per_example: List[int] = []
     errors: List[str] = []
+    outputs: List[List[Any]] = []
 
     for i, case in enumerate(cases):
         grid_in = case["args"][0]
@@ -116,8 +119,26 @@ def score_arc_program(
         p2 = pass_at_2_single(attempts, truth)
         metrics[f"{prefix}_{i}_pass_at_2"] = p2
         per_example.append(p2)
+        outputs.append(attempts)
 
     metrics["combined_score"] = sum(per_example) / len(per_example) if per_example else 0.0
     if errors:
         metrics["errors"] = errors
+    metrics["outputs"] = outputs
+    return metrics
+
+
+def score_arc_program(
+    task: BenchmarkTask,
+    agent_output: str,
+    use_held_out: bool = False,
+) -> Dict[str, Any]:
+    """Runs a candidate program with pass@2 semantics and returns OpenEvolve-style metrics.
+
+    `use_held_out=False` scores the demonstration (train) pairs; `True` scores the held-out (test) pairs.
+    """
+    cases = task.edge_cases if use_held_out else task.test_cases
+    prefix = "test_example" if use_held_out else "train_example"
+    metrics = score_arc_cases(cases, agent_output, task.entry_point, prefix)
+    metrics.pop("outputs", None)
     return metrics
