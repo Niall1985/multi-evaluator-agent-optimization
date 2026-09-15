@@ -3,3 +3,7 @@ __pycache__/
 *.pyc
 .pytest_cache/
 .venv/
+
+# run artifacts, rewritten on every generation / experiment run
+optimization_results.csv
+experiment_results.csv
