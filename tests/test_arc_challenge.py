@@ -379,19 +379,24 @@ class TestArcVisualisation(unittest.TestCase):
         at.run()
         self.assertFalse(at.exception, at.exception)
 
-        # Switch to the ARC suite: sidebar tier captions and metric names follow the pool
-        at.sidebar.radio[0].set_value("ARC-AGI (3 real + 3 partial)").run()
+        # Default = coding benchmark: canonical suite, coding-task dropdown, NO ARC tab
+        self.assertNotIn("ARC BENCHMARK: Grid Results", [t.label for t in at.tabs])
+        self.assertTrue(any(s.label == "Coding task" for s in at.sidebar.selectbox))
+        self.assertEqual(at.session_state["controller"].metric_names[0], "mu_1_correctness")
+
+        # One explicit Benchmark radio at the top of the sidebar; picking ARC selects the whole benchmark
+        # AND its default evaluator suite, and mounts the ARC tab.
+        bench_radio = next(r for r in at.sidebar.radio if r.label == "What to optimise the agent on")
+        self.assertEqual(bench_radio.options, ["Coding tasks (HumanEval / MBPP / algorithmic)", "ARC-AGI (whole benchmark)"])
+        bench_radio.set_value("ARC-AGI (whole benchmark)").run()
         self.assertFalse(at.exception, at.exception)
         ctrl = at.session_state["controller"]
+        self.assertEqual(ctrl.selected_task_id, ARC_BENCHMARK_ID)
         self.assertEqual(ctrl.metric_names[:3], ["arc_runs_successfully", "arc_pass_at_2_train", "arc_pass_at_2_test"])
         self.assertTrue(any("arc_pass_at_2_test" in c.value for c in at.sidebar.caption))
+        self.assertIn("ARC BENCHMARK: Grid Results", [t.label for t in at.tabs])
+        self.assertFalse(any(s.label == "Coding task" for s in at.sidebar.selectbox))  # no per-task picker for ARC
 
-        # ARC is offered as ONE benchmark entry, never as individual tasks
-        task_box = next(s for s in at.sidebar.selectbox if "Benchmark Problem" in s.label)
-        self.assertIn(ARC_BENCHMARK_NAME, task_box.options)
-        self.assertFalse(any(o.startswith("ARC 0") for o in task_box.options))
-        task_box.set_value(ARC_BENCHMARK_NAME).run()
-        self.assertEqual(at.session_state["controller"].selected_task_id, ARC_BENCHMARK_ID)
         at.sidebar.button[0].click().run()  # Run 1 Gen
         self.assertFalse(at.exception, at.exception)
 
@@ -413,6 +418,13 @@ class TestArcVisualisation(unittest.TestCase):
         self.assertEqual(shown["Pass@2 — demonstrations"][0], "1.00")  # core tier always runs
         self.assertEqual(at.error, [])
         self.assertEqual(at.warning, [])
+
+        # Back to coding: ARC tab disappears again and the canonical suite is restored
+        bench_radio = next(r for r in at.sidebar.radio if r.label == "What to optimise the agent on")
+        bench_radio.set_value("Coding tasks (HumanEval / MBPP / algorithmic)").run()
+        self.assertFalse(at.exception, at.exception)
+        self.assertNotIn("ARC BENCHMARK: Grid Results", [t.label for t in at.tabs])
+        self.assertEqual(at.session_state["controller"].metric_names[0], "mu_1_correctness")
 
     def test_streamlit_pareto_survives_negative_fitness(self):
         """Regression: px.scatter(size=...) crashed on negative fitness (cost penalty on zero-score agents)."""

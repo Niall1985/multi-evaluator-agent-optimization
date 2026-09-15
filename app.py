@@ -11,12 +11,10 @@ from core.agent import AGENT_ARCHETYPES
 from benchmarks.benchmark_tasks import BENCHMARK_TASKS
 from benchmarks.arc_challenge import (
     ARC_BENCHMARK_ID,
-    ARC_BENCHMARK_NAME,
     ARC_TASKS,
     benchmark_summary_frame,
     build_arc_evaluator_pool,
     get_arc_task,
-    is_arc_benchmark,
     pass_at_2_trajectory_figure,
     task_gallery_figure,
 )
@@ -114,8 +112,36 @@ def _build_controller(suite_name: str, **overrides) -> EvolutionController:
     return EvolutionController(**kwargs)
 
 
+# Top-level benchmark choice. Each benchmark has a default evaluator suite; the suite can still be overridden.
+BENCHMARKS = {
+    "Coding tasks (HumanEval / MBPP / algorithmic)": {
+        "suite": "Canonical (6 mu evaluators)",
+        "task_id": None,
+        "blurb": "7 canonical Python tasks scored by the 6 mu evaluators. Pick one task below or let each "
+                 "generation draw a random one.",
+    },
+    "ARC-AGI (whole benchmark)": {
+        "suite": "ARC-AGI (3 real + 3 partial)",
+        "task_id": ARC_BENCHMARK_ID,
+        "blurb": f"All {len(ARC_TASKS)} loaded ARC grid tasks are run every generation "
+                 f"({', '.join(t.id.removeprefix('arc_') for t in ARC_TASKS)}); scores are averaged, so "
+                 "`arc_pass_at_2_test` = fraction of the benchmark solved. One LLM call per task per generation.",
+    },
+}
+ARC_BENCHMARK_LABEL = "ARC-AGI (whole benchmark)"
+
+
+def _rebuild_controller(suite_name: str, **overrides) -> None:
+    """Swaps in a fresh controller. Needed whenever the metric set changes (GP + archive are keyed on it)."""
+    st.session_state.evaluator_suite = suite_name
+    st.session_state.controller = _build_controller(suite_name, **overrides)
+    st.session_state.generation_count = 0
+
+
+if "benchmark" not in st.session_state:
+    st.session_state.benchmark = next(iter(BENCHMARKS))
 if "evaluator_suite" not in st.session_state:
-    st.session_state.evaluator_suite = "Canonical (6 mu evaluators)"
+    st.session_state.evaluator_suite = BENCHMARKS[st.session_state.benchmark]["suite"]
 if "controller" not in st.session_state:
     st.session_state.controller = _build_controller(st.session_state.evaluator_suite)
 if "generation_count" not in st.session_state:
@@ -174,6 +200,46 @@ with st.sidebar:
     ctrl.llm_client.inter_call_delay = delay_slider
 
     st.markdown("---")
+    st.markdown("### Benchmark")
+    benchmark_names = list(BENCHMARKS)
+    chosen_benchmark = st.radio(
+        "What to optimise the agent on",
+        options=benchmark_names,
+        index=benchmark_names.index(st.session_state.benchmark),
+        help="Coding tasks: one HumanEval/MBPP problem (or a random one) per generation. "
+             "ARC-AGI: every loaded ARC grid task per generation, run as one benchmark.",
+    )
+    if chosen_benchmark != st.session_state.benchmark:
+        # Switching benchmark also switches to its default evaluator suite -> fresh controller.
+        st.session_state.benchmark = chosen_benchmark
+        _rebuild_controller(
+            BENCHMARKS[chosen_benchmark]["suite"],
+            lambda_penalty=ctrl.lambda_penalty,
+            default_strategy=ctrl.default_strategy,
+            initial_archetype=ctrl.initial_archetype,
+            selected_task_id=BENCHMARKS[chosen_benchmark]["task_id"],
+        )
+        st.rerun()
+    st.caption(BENCHMARKS[chosen_benchmark]["blurb"])
+    is_arc_active = chosen_benchmark == ARC_BENCHMARK_LABEL
+
+    if is_arc_active:
+        ctrl.selected_task_id = ARC_BENCHMARK_ID
+    else:
+        task_choices = ["All Benchmark Tasks (Suite / Random)"] + [t.name for t in BENCHMARK_TASKS]
+        current_task_idx = task_choices.index(ctrl.selected_task_id) if ctrl.selected_task_id in task_choices else 0
+        selected_task_name = st.selectbox(
+            "Coding task",
+            options=task_choices,
+            index=current_task_idx,
+            help="A specific problem (e.g. Stock Exchange, Fibonacci), or a random one from the suite each generation.",
+        )
+        ctrl.selected_task_id = None if selected_task_name == "All Benchmark Tasks (Suite / Random)" else selected_task_name
+        matched_task = next((t for t in BENCHMARK_TASKS if t.name == selected_task_name), None)
+        if matched_task:
+            st.caption(f"**Category:** {matched_task.category}\n\n**Goal:** {matched_task.description[:120]}...")
+
+    st.markdown("---")
     st.markdown("### Selectable Agent Archetypes")
     
     archetype_choices = list(AGENT_ARCHETYPES.keys())
@@ -184,42 +250,6 @@ with st.sidebar:
         help="Choose among 6 distinct specialized agent archetypes to initialize and evolve.",
     )
     st.caption(AGENT_ARCHETYPES[selected_archetype]["description"])
-
-    st.markdown("---")
-    st.markdown("### Selectable Benchmark Task")
-
-    # The ARC set is offered as ONE benchmark: every loaded task is run per generation and scores are averaged.
-    task_choices = ["All Benchmark Tasks (Suite / Random)"] + [t.name for t in BENCHMARK_TASKS] + [ARC_BENCHMARK_NAME]
-    current_task_idx = 0
-    if ctrl.selected_task_id:
-        for idx, t_name in enumerate(task_choices):
-            if t_name == ctrl.selected_task_id or (t_name == ARC_BENCHMARK_NAME and is_arc_benchmark(ctrl.selected_task_id)):
-                current_task_idx = idx
-                break
-
-    selected_task_name = st.selectbox(
-        "Benchmark Problem / Task Input",
-        options=task_choices,
-        index=current_task_idx,
-        help="Select a specific coding/reasoning problem (e.g. Stock Exchange, Fibonacci), the whole ARC-AGI benchmark, or test across the full suite.",
-    )
-    if selected_task_name == "All Benchmark Tasks (Suite / Random)":
-        ctrl.selected_task_id = None
-    elif selected_task_name == ARC_BENCHMARK_NAME:
-        ctrl.selected_task_id = ARC_BENCHMARK_ID
-    else:
-        ctrl.selected_task_id = selected_task_name
-
-    if selected_task_name == ARC_BENCHMARK_NAME:
-        st.caption(
-            f"**Category:** ARC-AGI Abstract Reasoning\n\n**Goal:** {len(ARC_TASKS)} grid task(s) per generation "
-            f"({', '.join(t.id.removeprefix('arc_') for t in ARC_TASKS)}); metrics are averaged across tasks, "
-            "so `arc_pass_at_2_test` = fraction of the benchmark solved. One LLM call per task per generation."
-        )
-    elif selected_task_name != "All Benchmark Tasks (Suite / Random)":
-        matched_task = next((t for t in BENCHMARK_TASKS if t.name == selected_task_name), None)
-        if matched_task:
-            st.caption(f"**Category:** {matched_task.category}\n\n**Goal:** {matched_task.description[:120]}...")
 
     st.markdown("---")
     st.markdown("### Search & Penalty Knobs")
@@ -264,16 +294,16 @@ with st.sidebar:
     )
     if chosen_suite != st.session_state.evaluator_suite:
         # Metric set changes -> GP, sampler and archive must be rebuilt; start a fresh controller.
-        st.session_state.evaluator_suite = chosen_suite
-        st.session_state.controller = _build_controller(
+        _rebuild_controller(
             chosen_suite,
             lambda_penalty=ctrl.lambda_penalty,
             default_strategy=ctrl.default_strategy,
             initial_archetype=ctrl.initial_archetype,
             selected_task_id=ctrl.selected_task_id,
         )
-        st.session_state.generation_count = 0
         st.rerun()
+    if chosen_suite != BENCHMARKS[chosen_benchmark]["suite"]:
+        st.caption(f"Override: the default suite for this benchmark is *{BENCHMARKS[chosen_benchmark]['suite']}*.")
 
     def _tier_caption(tier: str) -> str:
         return "\n".join(
@@ -343,15 +373,20 @@ st.markdown("---")
 # ---------------------------------------------------------
 # Tabs Layout
 # ---------------------------------------------------------
-tab_panelist, tab_inspector, tab_arc, tab1, tab2, tab3, tab4 = st.tabs([
+# The ARC grid tab only exists while the ARC benchmark is the active one.
+tab_labels = [
     "PRESENTATION: Graphs & Results Table",
     "GENERATION INSPECTOR: Prompts & Solutions",
-    "ARC BENCHMARK: Grid Results",
+    *(["ARC BENCHMARK: Grid Results"] if is_arc_active else []),
     "Tab 1: Live Evolution & Pareto Radar",
     "Tab 2: Gaussian Process & Adaptive Weights (Gap 2)",
     "Tab 3: Cost Awareness & Evaluator Pruning (Gaps 1 & 3)",
     "Tab 4: Population Archive & Data Export (CSV)",
-])
+]
+_tabs = iter(st.tabs(tab_labels))
+tab_panelist, tab_inspector = next(_tabs), next(_tabs)
+tab_arc = next(_tabs) if is_arc_active else None
+tab1, tab2, tab3, tab4 = next(_tabs), next(_tabs), next(_tabs), next(_tabs)
 
 
 # ---------------------------------------------------------
@@ -647,7 +682,8 @@ with tab_inspector:
 # ---------------------------------------------------------
 # TAB ARC: ARC-AGI Benchmark Grid Results
 # ---------------------------------------------------------
-with tab_arc:
+def render_arc_tab() -> None:
+    """Grid-level ARC results for the selected candidate; only mounted while ARC is the active benchmark."""
     st.subheader("ARC-AGI Benchmark: Input / Expected / Predicted Grids")
     st.caption(
         "Renders the candidate program's outputs next to the ground truth using the official ARC colour palette. "
@@ -657,10 +693,7 @@ with tab_arc:
 
     arc_agents = [a for a in ctrl.archive.get_all_agents() if a.task_id and str(a.task_id).startswith("arc_")]
     if not arc_agents:
-        st.info(
-            f"No ARC candidates yet. In the sidebar pick **{ARC_BENCHMARK_NAME}** (and optionally the ARC-AGI "
-            "evaluator suite), then run generations."
-        )
+        st.info("No ARC candidates yet. Click **Run 1 Gen** or **Run 5 Gen** in the sidebar.")
     else:
         # Candidate selector, defaulting to the best ARC agent
         best_arc = max(arc_agents, key=lambda a: a.fitness)
@@ -750,6 +783,11 @@ with tab_arc:
                 st.info("No ARC metrics recorded yet.")
             else:
                 st.dataframe(df_arc, use_container_width=True, hide_index=True)
+
+
+if tab_arc is not None:
+    with tab_arc:
+        render_arc_tab()
 
 
 # ---------------------------------------------------------
