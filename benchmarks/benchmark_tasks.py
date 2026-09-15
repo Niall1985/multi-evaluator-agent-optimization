@@ -203,7 +203,19 @@ def get_benchmark_task(task_id: str) -> Optional[BenchmarkTask]:
     for t in BENCHMARK_TASKS:
         if t.id == task_id or t.name == task_id:
             return t
-    return None
+    # Fall back to the ARC suite. Imported lazily: arc_challenge imports BenchmarkTask from this module.
+    from benchmarks.arc_challenge import get_arc_task
+    return get_arc_task(task_id)
+
+
+def get_benchmark_tasks(task_id: str) -> List[BenchmarkTask]:
+    """Resolves a selector to the list of tasks it stands for: a single task, or a whole benchmark
+    (e.g. `arc_benchmark` -> every loaded ARC task). Empty list if unknown."""
+    from benchmarks.arc_challenge import ARC_TASKS, is_arc_benchmark
+    if is_arc_benchmark(task_id):
+        return list(ARC_TASKS)
+    single = get_benchmark_task(task_id)
+    return [single] if single else []
 
 
 def get_random_task() -> BenchmarkTask:

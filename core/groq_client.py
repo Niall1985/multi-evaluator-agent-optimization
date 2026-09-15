@@ -14,13 +14,15 @@ logger = logging.getLogger(__name__)
 
 import time
 
+# Budget used when a reasoning model returns empty content because max_tokens ran out mid-reasoning.
+TRUNCATION_RETRY_MIN_TOKENS = 4096
+
+# Tried in order after the configured model. Keep to models that currently exist on Groq: each dead entry
+# costs a round-trip 404 on every rate-limited call (llama3-70b-8192, mixtral-8x7b-32768, gemma2-9b-it and
+# llama-3.3-70b-versatile all returned 404/decommissioned in Sept 2026).
 FALLBACK_MODELS = [
     "openai/gpt-oss-120b",
-    "llama-3.3-70b-versatile",
-    "llama3-70b-8192",
-    "mixtral-8x7b-32768",
-    "gemma2-9b-it",
-    "openai/gpt-oss-20b"
+    "openai/gpt-oss-20b",
 ]
 
 
@@ -44,6 +46,7 @@ class GroqLLMClient:
         self.model = model
         self.inter_call_delay = inter_call_delay
         self.client = None
+        self.failed_calls = 0  # live calls that exhausted every model and returned ""
 
         if not self.is_mock and GROQ_AVAILABLE and self.api_key and self.api_key.strip():
             try:
@@ -68,6 +71,8 @@ class GroqLLMClient:
 
         candidate_models = [self.model] + [m for m in FALLBACK_MODELS if m != self.model]
         last_error = None
+        budget = max_tokens
+        budget_raised = False
 
         for model_name in candidate_models:
             # Attempt up to 3 retries with exponential backoff on TPM rate limits
@@ -84,9 +89,22 @@ class GroqLLMClient:
                         ],
                         temperature=max(0.0, min(2.0, temperature)),
                         top_p=max(0.0, min(1.0, top_p)),
-                        max_tokens=max_tokens,
+                        max_tokens=budget,
                     )
-                    return response.choices[0].message.content or ""
+                    choice = response.choices[0]
+                    content = choice.message.content or ""
+                    # Reasoning models (openai/gpt-oss-*) spend the token budget on hidden reasoning first.
+                    # A small max_tokens then yields finish_reason="length" with EMPTY content - indistinguishable
+                    # from a broken answer downstream. Retry once with a larger budget instead of returning "".
+                    if not content.strip() and choice.finish_reason == "length" and not budget_raised:
+                        budget = max(TRUNCATION_RETRY_MIN_TOKENS, budget * 4)
+                        budget_raised = True
+                        logger.warning(
+                            f"{model_name}: budget of {max_tokens} tokens exhausted by reasoning with no content. "
+                            f"Retrying once with max_tokens={budget}."
+                        )
+                        continue
+                    return content
                 except Exception as e:
                     err_str = str(e).lower()
                     last_error = e
@@ -103,8 +121,11 @@ class GroqLLMClient:
                         logger.warning(f"Generation error on '{model_name}': {e}. Retrying.")
                         time.sleep(1.0)
 
-        logger.error(f"All Groq models failed. Reverting to mock response. Error: {last_error}")
-        return self._mock_generate(system_prompt, user_prompt, temperature)
+        # Never substitute a mock answer for a failed LIVE call: the mock knows the canonical and bundled ARC
+        # solutions, so doing so would fake successes in real results. An empty answer scores 0 honestly.
+        self.failed_calls += 1
+        logger.error(f"All Groq models failed; returning empty answer (failed live calls so far: {self.failed_calls}). Error: {last_error}")
+        return ""
 
     def _mock_generate(self, system_prompt: str, user_prompt: str, temperature: float) -> str:
         """High-quality deterministic mock generation for offline testing and demo mode."""
@@ -160,6 +181,11 @@ class GroqLLMClient:
                 )
 
         # 3. Check for Benchmark Task Execution (Specific matches first)
+        # ARC-AGI grid tasks (benchmarks/arc_challenge) - matched before generic keywords
+        # like "target" so grid prompts never fall into the coding-task branches.
+        if "arc-agi task" in lower_user:
+            return self._mock_arc_solution(lower_user)
+
         if "parenthes" in lower_user or "bracket" in lower_user or "task_valid_parentheses" in lower_user:
             return (
                 "```python\n"
@@ -256,3 +282,40 @@ class GroqLLMClient:
                 "    return True\n"
                 "```"
             )
+
+    @staticmethod
+    def _mock_arc_solution(lower_user: str) -> str:
+        """Deterministic solutions for the bundled ARC-AGI tasks (offline demo mode)."""
+        if "arc-agi task 00576224" in lower_user:
+            body = (
+                "def solve(grid):\n"
+                "    flipped = [row[::-1] for row in grid]\n"
+                "    out = []\n"
+                "    for block in (grid, flipped, grid):\n"
+                "        for row in block:\n"
+                "            out.append(row * 3)\n"
+                "    return out\n"
+            )
+        elif "arc-agi task 25ff71a9" in lower_user:
+            body = (
+                "def solve(grid):\n"
+                "    width = len(grid[0])\n"
+                "    return [[0] * width] + [list(row) for row in grid[:-1]]\n"
+            )
+        elif "arc-agi task 3c9b0459" in lower_user:
+            body = (
+                "def solve(grid):\n"
+                "    return [row[::-1] for row in grid[::-1]]\n"
+            )
+        elif "arc-agi task c8f0f002" in lower_user:
+            body = (
+                "def solve(grid):\n"
+                "    return [[5 if v == 7 else v for v in row] for row in grid]\n"
+            )
+        else:
+            # Unknown ARC task: identity transform (valid grid, will not pass).
+            body = (
+                "def solve(grid):\n"
+                "    return [list(row) for row in grid]\n"
+            )
+        return "```python\n" + body + "```"

@@ -8,7 +8,16 @@ from plotly.subplots import make_subplots
 
 from controller import EvolutionController
 from core.agent import AGENT_ARCHETYPES
-from tasks.benchmark_tasks import BENCHMARK_TASKS
+from benchmarks.benchmark_tasks import BENCHMARK_TASKS
+from benchmarks.arc_challenge import (
+    ARC_BENCHMARK_ID,
+    ARC_TASKS,
+    benchmark_summary_frame,
+    build_arc_evaluator_pool,
+    get_arc_task,
+    pass_at_2_trajectory_figure,
+    task_gallery_figure,
+)
 
 # ---------------------------------------------------------
 # Environment Configuration
@@ -83,15 +92,58 @@ st.markdown("""
 # ---------------------------------------------------------
 # Session State Initialization
 # ---------------------------------------------------------
-if "controller" not in st.session_state:
-    st.session_state.controller = EvolutionController(
+EVALUATOR_SUITES = {
+    "Canonical (6 mu evaluators)": None,
+    "ARC-AGI (3 real + 3 partial)": build_arc_evaluator_pool,
+}
+
+
+def _build_controller(suite_name: str, **overrides) -> EvolutionController:
+    kwargs = dict(
         api_key=os.getenv("GROQ_API_KEY", ""),
         model="openai/gpt-oss-120b",
         lambda_penalty=0.5,
         default_strategy="adaptive",
         initial_archetype="General Balanced Assistant",
         inter_call_delay=1.5,
+        evaluator_pool_factory=EVALUATOR_SUITES[suite_name],
     )
+    kwargs.update(overrides)
+    return EvolutionController(**kwargs)
+
+
+# Top-level benchmark choice. Each benchmark has a default evaluator suite; the suite can still be overridden.
+BENCHMARKS = {
+    "Coding tasks (HumanEval / MBPP / algorithmic)": {
+        "suite": "Canonical (6 mu evaluators)",
+        "task_id": None,
+        "blurb": "7 canonical Python tasks scored by the 6 mu evaluators. Pick one task below or let each "
+                 "generation draw a random one.",
+    },
+    "ARC-AGI (whole benchmark)": {
+        "suite": "ARC-AGI (3 real + 3 partial)",
+        "task_id": ARC_BENCHMARK_ID,
+        "blurb": f"All {len(ARC_TASKS)} loaded ARC grid tasks are run every generation "
+                 f"({', '.join(t.id.removeprefix('arc_') for t in ARC_TASKS)}); scores are averaged, so "
+                 "`arc_pass_at_2_test` = fraction of the benchmark solved. One LLM call per task per generation.",
+    },
+}
+ARC_BENCHMARK_LABEL = "ARC-AGI (whole benchmark)"
+
+
+def _rebuild_controller(suite_name: str, **overrides) -> None:
+    """Swaps in a fresh controller. Needed whenever the metric set changes (GP + archive are keyed on it)."""
+    st.session_state.evaluator_suite = suite_name
+    st.session_state.controller = _build_controller(suite_name, **overrides)
+    st.session_state.generation_count = 0
+
+
+if "benchmark" not in st.session_state:
+    st.session_state.benchmark = next(iter(BENCHMARKS))
+if "evaluator_suite" not in st.session_state:
+    st.session_state.evaluator_suite = BENCHMARKS[st.session_state.benchmark]["suite"]
+if "controller" not in st.session_state:
+    st.session_state.controller = _build_controller(st.session_state.evaluator_suite)
 if "generation_count" not in st.session_state:
     st.session_state.generation_count = 0
 
@@ -148,6 +200,46 @@ with st.sidebar:
     ctrl.llm_client.inter_call_delay = delay_slider
 
     st.markdown("---")
+    st.markdown("### Benchmark")
+    benchmark_names = list(BENCHMARKS)
+    chosen_benchmark = st.radio(
+        "What to optimise the agent on",
+        options=benchmark_names,
+        index=benchmark_names.index(st.session_state.benchmark),
+        help="Coding tasks: one HumanEval/MBPP problem (or a random one) per generation. "
+             "ARC-AGI: every loaded ARC grid task per generation, run as one benchmark.",
+    )
+    if chosen_benchmark != st.session_state.benchmark:
+        # Switching benchmark also switches to its default evaluator suite -> fresh controller.
+        st.session_state.benchmark = chosen_benchmark
+        _rebuild_controller(
+            BENCHMARKS[chosen_benchmark]["suite"],
+            lambda_penalty=ctrl.lambda_penalty,
+            default_strategy=ctrl.default_strategy,
+            initial_archetype=ctrl.initial_archetype,
+            selected_task_id=BENCHMARKS[chosen_benchmark]["task_id"],
+        )
+        st.rerun()
+    st.caption(BENCHMARKS[chosen_benchmark]["blurb"])
+    is_arc_active = chosen_benchmark == ARC_BENCHMARK_LABEL
+
+    if is_arc_active:
+        ctrl.selected_task_id = ARC_BENCHMARK_ID
+    else:
+        task_choices = ["All Benchmark Tasks (Suite / Random)"] + [t.name for t in BENCHMARK_TASKS]
+        current_task_idx = task_choices.index(ctrl.selected_task_id) if ctrl.selected_task_id in task_choices else 0
+        selected_task_name = st.selectbox(
+            "Coding task",
+            options=task_choices,
+            index=current_task_idx,
+            help="A specific problem (e.g. Stock Exchange, Fibonacci), or a random one from the suite each generation.",
+        )
+        ctrl.selected_task_id = None if selected_task_name == "All Benchmark Tasks (Suite / Random)" else selected_task_name
+        matched_task = next((t for t in BENCHMARK_TASKS if t.name == selected_task_name), None)
+        if matched_task:
+            st.caption(f"**Category:** {matched_task.category}\n\n**Goal:** {matched_task.description[:120]}...")
+
+    st.markdown("---")
     st.markdown("### Selectable Agent Archetypes")
     
     archetype_choices = list(AGENT_ARCHETYPES.keys())
@@ -158,30 +250,6 @@ with st.sidebar:
         help="Choose among 6 distinct specialized agent archetypes to initialize and evolve.",
     )
     st.caption(AGENT_ARCHETYPES[selected_archetype]["description"])
-
-    st.markdown("---")
-    st.markdown("### Selectable Benchmark Task")
-
-    task_choices = ["All Benchmark Tasks (Suite / Random)"] + [t.name for t in BENCHMARK_TASKS]
-    current_task_idx = 0
-    if ctrl.selected_task_id:
-        for idx, t_name in enumerate(task_choices):
-            if t_name == ctrl.selected_task_id:
-                current_task_idx = idx
-                break
-
-    selected_task_name = st.selectbox(
-        "Benchmark Problem / Task Input",
-        options=task_choices,
-        index=current_task_idx,
-        help="Select a specific coding/reasoning problem (e.g. Stock Exchange, Fibonacci, Interval Merge) or test across the full suite.",
-    )
-    ctrl.selected_task_id = None if selected_task_name == "All Benchmark Tasks (Suite / Random)" else selected_task_name
-    
-    if selected_task_name != "All Benchmark Tasks (Suite / Random)":
-        matched_task = next((t for t in BENCHMARK_TASKS if t.name == selected_task_name), None)
-        if matched_task:
-            st.caption(f"**Category:** {matched_task.category}\n\n**Goal:** {matched_task.description[:120]}...")
 
     st.markdown("---")
     st.markdown("### Search & Penalty Knobs")
@@ -216,13 +284,39 @@ with st.sidebar:
 
     st.markdown("---")
     st.markdown("### Evaluator Suite Tiers")
+    suite_names = list(EVALUATOR_SUITES)
+    chosen_suite = st.radio(
+        "Evaluator Suite",
+        options=suite_names,
+        index=suite_names.index(st.session_state.evaluator_suite),
+        help="Canonical: the 6 mu evaluators for coding tasks. ARC-AGI: official pass@2 metrics plus "
+             "AI-generated partial-credit heuristics for grid tasks (see benchmarks/arc_challenge).",
+    )
+    if chosen_suite != st.session_state.evaluator_suite:
+        # Metric set changes -> GP, sampler and archive must be rebuilt; start a fresh controller.
+        _rebuild_controller(
+            chosen_suite,
+            lambda_penalty=ctrl.lambda_penalty,
+            default_strategy=ctrl.default_strategy,
+            initial_archetype=ctrl.initial_archetype,
+            selected_task_id=ctrl.selected_task_id,
+        )
+        st.rerun()
+    if chosen_suite != BENCHMARKS[chosen_benchmark]["suite"]:
+        st.caption(f"Override: the default suite for this benchmark is *{BENCHMARKS[chosen_benchmark]['suite']}*.")
+
+    def _tier_caption(tier: str) -> str:
+        return "\n".join(
+            f"• {ev.name} (${ev.cost:.3f})" for ev in ctrl.evaluator_pool.evaluators.values() if ev.tier == tier
+        ) or "• (none)"
+
     c_sub1, c_sub2 = st.columns(2)
     with c_sub1:
         st.markdown("<span class='badge-core'>Subset 1: Core Tier</span>", unsafe_allow_html=True)
-        st.caption("• mu_1 Correctness ($0.001)\n• mu_2 Latency ($0.000)\n• mu_3 Conciseness ($0.000)")
+        st.caption(_tier_caption("core"))
     with c_sub2:
         st.markdown("<span class='badge-deep'>Subset 2: Deep Tier</span>", unsafe_allow_html=True)
-        st.caption("• mu_4 Reasoning ($0.015)\n• mu_5 Edge Cases ($0.005)\n• mu_6 Safety ($0.015)")
+        st.caption(_tier_caption("deep"))
 
     st.markdown("---")
     st.markdown("### Optimization Actions")
@@ -279,14 +373,20 @@ st.markdown("---")
 # ---------------------------------------------------------
 # Tabs Layout
 # ---------------------------------------------------------
-tab_panelist, tab_inspector, tab1, tab2, tab3, tab4 = st.tabs([
+# The ARC grid tab only exists while the ARC benchmark is the active one.
+tab_labels = [
     "PRESENTATION: Graphs & Results Table",
     "GENERATION INSPECTOR: Prompts & Solutions",
+    *(["ARC BENCHMARK: Grid Results"] if is_arc_active else []),
     "Tab 1: Live Evolution & Pareto Radar",
     "Tab 2: Gaussian Process & Adaptive Weights (Gap 2)",
     "Tab 3: Cost Awareness & Evaluator Pruning (Gaps 1 & 3)",
     "Tab 4: Population Archive & Data Export (CSV)",
-])
+]
+_tabs = iter(st.tabs(tab_labels))
+tab_panelist, tab_inspector = next(_tabs), next(_tabs)
+tab_arc = next(_tabs) if is_arc_active else None
+tab1, tab2, tab3, tab4 = next(_tabs), next(_tabs), next(_tabs), next(_tabs)
 
 
 # ---------------------------------------------------------
@@ -351,27 +451,36 @@ with tab_panelist:
         pareto_agents = ctrl.archive.get_pareto_front()
         pareto_ids = {a.id for a in pareto_agents}
 
+        # Axes depend on the active evaluator suite: (x = accuracy-like, y = secondary, hover = deep metric)
+        if "mu_1_correctness" in ctrl.metric_names:
+            pareto_axes = [("Correctness (mu_1)", "mu_1_correctness"), ("Latency Score (mu_2)", "mu_2_latency"), ("Reasoning (mu_4)", "mu_4_reasoning")]
+        else:
+            pareto_axes = [("Pass@2 Train (real)", "arc_pass_at_2_train"), ("Pixel Accuracy (partial)", "arc_pixel_accuracy"), ("Pass@2 Held-out (real)", "arc_pass_at_2_test")]
+        (x_label, x_key), (y_label, y_key), (h_label, h_key) = pareto_axes
+
         if all_agents:
             scatter_data = []
             for a in all_agents:
                 scatter_data.append({
                     "Agent ID": a.id,
                     "Generation": a.generation,
-                    "Correctness (mu_1)": a.metrics.get("mu_1_correctness", 0.0),
-                    "Latency Score (mu_2)": a.metrics.get("mu_2_latency", 0.0),
-                    "Reasoning (mu_4)": a.metrics.get("mu_4_reasoning", 0.0),
+                    x_label: a.metrics.get(x_key, 0.0),
+                    y_label: a.metrics.get(y_key, 0.0),
+                    h_label: a.metrics.get(h_key, 0.0),
                     "Cost ($)": a.cost_spent,
                     "Fitness": a.fitness,
+                    # Fitness can be negative (cost penalty on a zero-score candidate); marker sizes cannot.
+                    "Marker Size": max(a.fitness, 0.0) + 0.05,
                     "Pareto Status": "Pareto Optimal (Non-Dominated)" if a.id in pareto_ids else "Dominated Candidate",
                 })
             df_scatter = pd.DataFrame(scatter_data)
             fig_p_scat = px.scatter(
                 df_scatter,
-                x="Correctness (mu_1)",
-                y="Latency Score (mu_2)",
-                size="Fitness",
+                x=x_label,
+                y=y_label,
+                size="Marker Size",
                 color="Pareto Status",
-                hover_data=["Agent ID", "Generation", "Cost ($)", "Reasoning (mu_4)"],
+                hover_data={"Agent ID": True, "Generation": True, "Cost ($)": True, h_label: True, "Fitness": ":.4f", "Marker Size": False},
                 color_discrete_map={"Pareto Optimal (Non-Dominated)": "#DC2626", "Dominated Candidate": "#3B82F6"},
             )
             fig_p_scat.update_layout(height=360, margin=dict(l=30, r=30, t=30, b=30))
@@ -512,7 +621,7 @@ with tab_inspector:
         with kpi_g2:
             st.metric("Cost Spent", f"${selected_agent.cost_spent:.5f}")
         with kpi_g3:
-            st.metric("Active Evaluators", f"{len(selected_agent.active_evaluators)} / 6")
+            st.metric("Active Evaluators", f"{len(selected_agent.active_evaluators)} / {len(ctrl.metric_names)}")
         with kpi_g4:
             st.metric("Mutation Strategy", f"{selected_agent.mutation_type}")
 
@@ -568,6 +677,117 @@ with tab_inspector:
                 "Solution Preview": (a.last_solution[:60] + "...") if a.last_solution else "N/A",
             })
         st.dataframe(pd.DataFrame(table_rows), use_container_width=True)
+
+
+# ---------------------------------------------------------
+# TAB ARC: ARC-AGI Benchmark Grid Results
+# ---------------------------------------------------------
+def render_arc_tab() -> None:
+    """Grid-level ARC results for the selected candidate; only mounted while ARC is the active benchmark."""
+    st.subheader("ARC-AGI Benchmark: Input / Expected / Predicted Grids")
+    st.caption(
+        "Renders the candidate program's outputs next to the ground truth using the official ARC colour palette. "
+        "Solid-line metrics are the real ARC scores (pixel-perfect pass@2); dashed ones are AI-generated partial-credit "
+        "heuristics from `benchmarks/arc_challenge/partial_evaluators.py`."
+    )
+
+    arc_agents = [a for a in ctrl.archive.get_all_agents() if a.task_id and str(a.task_id).startswith("arc_")]
+    if not arc_agents:
+        st.info("No ARC candidates yet. Click **Run 1 Gen** or **Run 5 Gen** in the sidebar.")
+    else:
+        # Candidate selector, defaulting to the best ARC agent
+        best_arc = max(arc_agents, key=lambda a: a.fitness)
+        arc_options = [
+            f"Gen {a.generation}: {a.id} — {a.task_id} — Fitness {a.fitness:.4f}" for a in arc_agents
+        ]
+        sel_idx = st.selectbox(
+            "Candidate to visualise",
+            options=range(len(arc_options)),
+            format_func=lambda i: arc_options[i],
+            index=arc_agents.index(best_arc),
+        )
+        arc_agent = arc_agents[sel_idx]
+
+        # Benchmark-level KPIs (averaged over every task in the run). A metric the selective search pruned
+        # from this candidate's active subset was never computed: show "—", not a fake 0.00.
+        k1, k2, k3, k4 = st.columns(4)
+        m = arc_agent.metrics or {}
+        n_tasks = len(arc_agent.task_metrics) or 1
+
+        def _kpi(*keys: str) -> str:
+            for k in keys:
+                if k in m:
+                    return f"{m[k]:.2f}"
+            return "— (pruned)"
+
+        with k1:
+            st.metric("Pass@2 — demonstrations", _kpi("arc_pass_at_2_train", "mu_1_correctness"))
+        with k2:
+            held_out_key = next((k for k in ("arc_pass_at_2_test", "mu_5_edge_cases") if k in m), None)
+            solved_note = None
+            if held_out_key and arc_agent.task_metrics:
+                solved = sum(1 for tm in arc_agent.task_metrics.values() if tm.get(held_out_key, 0.0) >= 1.0)
+                solved_note = f"{solved} / {n_tasks} tasks solved"
+            st.metric("Pass@2 — held-out (official)", _kpi("arc_pass_at_2_test", "mu_5_edge_cases"), solved_note, delta_color="off")
+        with k3:
+            st.metric("Pixel accuracy (partial)", _kpi("arc_pixel_accuracy"))
+        with k4:
+            st.metric("Fitness F", f"{arc_agent.fitness:.4f}")
+
+        # Per-task breakdown for whole-benchmark runs
+        if arc_agent.task_metrics:
+            st.markdown("##### Per-task scores (this candidate)")
+            df_tasks = pd.DataFrame.from_dict(arc_agent.task_metrics, orient="index").rename_axis("Task").reset_index()
+            if "arc_pass_at_2_test" in df_tasks.columns:
+                df_tasks.insert(1, "Solved", df_tasks["arc_pass_at_2_test"] >= 1.0)
+            st.dataframe(df_tasks, use_container_width=True, hide_index=True)
+
+        # Grid gallery: pick which task of the run to draw
+        solutions = arc_agent.task_solutions or ({arc_agent.task_id: arc_agent.last_solution} if arc_agent.last_solution else {})
+        task_ids = [tid for tid in solutions if get_arc_task(tid) is not None]
+        if not task_ids:
+            st.warning("No loaded ARC task matches this candidate's solutions (check ARC_DATA_ROOT / ARC_TASK_FILE).")
+        else:
+            def _task_label(tid: str) -> str:
+                tm = arc_agent.task_metrics.get(tid, {})
+                p2 = tm.get("arc_pass_at_2_test", tm.get("mu_5_edge_cases"))
+                mark = "" if p2 is None else (" ✓" if p2 >= 1.0 else " ✗")
+                return f"{get_arc_task(tid).name}{mark}"
+
+            gallery_tid = st.selectbox("Task to draw", options=task_ids, format_func=_task_label) if len(task_ids) > 1 else task_ids[0]
+            arc_task = get_arc_task(gallery_tid)
+            program = solutions[gallery_tid]
+
+            st.markdown(f"##### {arc_task.name}")
+            st.caption(f"{len(arc_task.test_cases)} demonstration pair(s), {len(arc_task.edge_cases)} held-out pair(s). "
+                       "Predicted shows attempt 1 (or `solve`); attempt 2 is shown when only it is correct.")
+            st.plotly_chart(task_gallery_figure(arc_task, program), use_container_width=True)
+
+            with st.expander("Candidate program for this task", expanded=False):
+                st.code(program, language="python")
+
+        st.markdown("---")
+        c_traj, c_sum = st.columns([3, 2])
+        with c_traj:
+            st.markdown("#### ARC Scores over Generations")
+            traj_records = [r for r in ctrl.history_records if str(r.get("task_id", "")).startswith("arc_")]
+            fig_arc_traj = pass_at_2_trajectory_figure(traj_records)
+            if fig_arc_traj.data:
+                st.plotly_chart(fig_arc_traj, use_container_width=True)
+            else:
+                st.info("ARC metrics appear here when the ARC-AGI evaluator suite is active.")
+        with c_sum:
+            st.markdown("#### Best-so-far per ARC Task")
+            df_arc = benchmark_summary_frame(ctrl.archive.get_all_agents())
+            if df_arc.empty:
+                st.info("No ARC metrics recorded yet.")
+            else:
+                st.dataframe(df_arc, use_container_width=True, hide_index=True)
+
+
+if tab_arc is not None:
+    with tab_arc:
+        render_arc_tab()
 
 
 # ---------------------------------------------------------

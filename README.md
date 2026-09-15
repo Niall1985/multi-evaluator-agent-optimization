@@ -96,9 +96,10 @@ multi-evaluator-agent-optimization/
 │   ├── bayesian_weights.py    # Gaussian Process + Expected Improvement for weights w
 │   ├── joint_sampler.py       # Samples joint search space V = (pi, x_E, w, theta_H)
 │   └── scoring.py             # Cost-penalized scalarization: sum(w*mu) - lambda*sum(c)
-├── tasks/
+├── benchmarks/
 │   ├── __init__.py
-│   └── benchmark_tasks.py     # Python algorithmic & reasoning benchmark suite
+│   ├── benchmark_tasks.py    # 7 canonical HumanEval / MBPP / algorithmic tasks + BenchmarkTask dataclass
+│   └── arc_challenge/         # ARC-AGI grid tasks: split-file data, real + partial evaluators, viz
 ├── controller.py              # Evolutionary optimization loop orchestrator
 ├── app.py                     # Interactive Streamlit Web Application
 ├── requirements.txt           # Python dependencies
@@ -111,9 +112,11 @@ multi-evaluator-agent-optimization/
 ## Quickstart & Setup
 
 ### 1. Install Dependencies
+The project is managed with [uv](https://docs.astral.sh/uv/) (`pyproject.toml`):
 ```bash
-pip install -r requirements.txt
+uv sync
 ```
+(`pip install -r requirements.txt` still works if you prefer a plain virtualenv.)
 
 ### 2. Set Groq API Key
 The system automatically reads your API key from `.env` or system environment variables:
@@ -125,7 +128,12 @@ If no key is provided, the framework operates in offline mock simulation mode.
 
 ### 3. Launch Streamlit Web UI
 ```bash
-streamlit run app.py
+uv run streamlit run app.py
+```
+
+### 4. Run the tests
+```bash
+uv run pytest
 ```
 
 ---

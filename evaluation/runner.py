@@ -1,9 +1,10 @@
+import ast
 import time
 import re
 import math
 from dataclasses import dataclass, field
 from typing import Dict, List, Any, Optional, Tuple, Callable
-from tasks.benchmark_tasks import BenchmarkTask
+from benchmarks.benchmark_tasks import BenchmarkTask
 
 
 @dataclass
@@ -62,20 +63,68 @@ class CodeExecutionRunner:
     def __init__(self, timeout_sec: float = 2.0):
         self.timeout_sec = timeout_sec
 
+    # Typographic characters LLMs emit in prose that also leak into code (non-breaking hyphen, dashes, smart quotes).
+    _UNICODE_PUNCT = str.maketrans({"‑": "-", "‐": "-", "–": "-", "—": "-",
+                                    "‘": "'", "’": "'", "“": '"', "”": '"', " ": " "})
+
     @staticmethod
-    def extract_code(text: str) -> str:
-        """Extracts pure python code from LLM responses."""
-        match = re.search(r"```python\s*(.*?)\s*```", text, re.DOTALL)
-        if match:
-            return match.group(1)
-        match = re.search(r"```\s*(.*?)\s*```", text, re.DOTALL)
-        if match:
-            return match.group(1)
+    def _parses(code: str) -> bool:
+        try:
+            ast.parse(code)
+            return True
+        except SyntaxError:
+            return False
+
+    @classmethod
+    def extract_code(cls, text: str) -> str:
+        """Extracts the Python program from an LLM response.
+
+        Responses often contain several fenced blocks (a math/pseudo-code fence first, the real
+        ```python block later) or unfenced code after prose, so "first fence wins" is not enough.
+        Preference order: a block that parses AND defines a function (python-labelled first), then any
+        block that parses, then the whole text if it parses, then the tail from the first `def`/`import`
+        line. Typographic hyphens/quotes are normalised only when that is what stops a block parsing.
+        """
+        fences = re.findall(r"```([A-Za-z0-9_+-]*)[ \t]*\n?(.*?)```", text, re.DOTALL)
+        candidates = [(lang.lower(), body.strip()) for lang, body in fences if body.strip()]
+        # python-labelled blocks first, then unlabelled/other, keeping original order within each group
+        candidates.sort(key=lambda c: 0 if c[0] in ("python", "py", "python3") else 1)
+
+        def _usable(body: str) -> Optional[str]:
+            for variant in (body, body.translate(cls._UNICODE_PUNCT)):
+                if cls._parses(variant):
+                    return variant
+            return None
+
+        parsed = [(lang, u) for lang, body in candidates if (u := _usable(body)) is not None]
+        for _lang, code in parsed:
+            if re.search(r"^\s*def\s+\w+", code, re.MULTILINE):
+                return code
+        if parsed:
+            return parsed[0][1]
+
+        whole = _usable(text.strip())
+        if whole is not None:
+            return whole
+        # Unfenced code after prose: keep everything from the first code-looking line
+        m = re.search(r"^(?:def|import|from|class)\s", text, re.MULTILINE)
+        if m:
+            tail = _usable(text[m.start():].strip())
+            if tail is not None:
+                return tail
+        if candidates:  # fenced but nothing parses anywhere: first block, as before (caller reports SyntaxError)
+            return candidates[0][1]
         return text
 
     @staticmethod
     def _are_values_equal(actual: Any, expected: Any) -> bool:
         """Checks equality with float tolerance if applicable."""
+        # Grid-style outputs (ARC tasks) may come back as numpy arrays; `==` on arrays is
+        # element-wise and ambiguous in a bool context, so normalise to nested lists first.
+        if hasattr(actual, "tolist"):
+            actual = actual.tolist()
+        if hasattr(expected, "tolist"):
+            expected = expected.tolist()
         if isinstance(actual, float) and isinstance(expected, float):
             return math.isclose(actual, expected, rel_tol=1e-5, abs_tol=1e-5)
         return actual == expected

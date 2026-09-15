@@ -1,1 +1,8 @@
 .env
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+
+# run artifacts, rewritten on every generation / experiment run
+*_results.csv

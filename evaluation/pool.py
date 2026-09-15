@@ -15,10 +15,11 @@ from .metrics import (
 class EvaluatorPool:
     """Orchestrates evaluator registration and runs selective subsets x_E on candidate agents."""
 
-    def __init__(self, llm_client: GroqLLMClient):
+    def __init__(self, llm_client: GroqLLMClient, register_defaults: bool = True):
         self.llm_client = llm_client
         self.evaluators: Dict[str, BaseEvaluator] = {}
-        self._register_default_evaluators()
+        if register_defaults:
+            self._register_default_evaluators()
 
     def _register_default_evaluators(self):
         # Subset 1: Fast Operational / Core Tier
@@ -41,7 +42,7 @@ class EvaluatorPool:
         return [name for name, ev in self.evaluators.items() if ev.tier == tier]
 
     def get_full_eval_cost(self) -> float:
-        """Returns the total cost if all 6 evaluators were executed."""
+        """Returns the total cost if all registered evaluators were executed."""
         return sum(ev.cost for ev in self.evaluators.values())
 
     def evaluate_subset(

@@ -1,6 +1,6 @@
 import time
 import logging
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Callable, Tuple
 from core.agent import Agent, HarnessKnobs, AGENT_ARCHETYPES
 from core.archive import PopulationArchive
 from core.groq_client import GroqLLMClient
@@ -10,7 +10,8 @@ from optimization.bayesian_weights import BayesianWeightOptimizer
 from optimization.scoring import calculate_cost_penalized_fitness, calculate_relative_improvement
 from optimization.joint_sampler import JointSearchSampler
 from optimization.bandit import UCB1MutationBandit
-from tasks.benchmark_tasks import BENCHMARK_TASKS, BenchmarkTask, get_random_task, get_benchmark_task
+from benchmarks.benchmark_tasks import BENCHMARK_TASKS, BenchmarkTask, get_random_task, get_benchmark_tasks
+from benchmarks.arc_challenge import ARC_BENCHMARK_ID, is_arc_benchmark
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +29,7 @@ class EvolutionController:
         selected_task_id: Optional[str] = None,
         inter_call_delay: float = 1.5,
         is_mock: Optional[bool] = None,
+        evaluator_pool_factory: Optional[Callable[[GroqLLMClient], EvaluatorPool]] = None,
     ):
         self.api_key = api_key
         self.model = model
@@ -46,7 +48,11 @@ class EvolutionController:
             inter_call_delay=inter_call_delay,
             is_mock=is_mock,
         )
-        self.evaluator_pool = EvaluatorPool(llm_client=self.llm_client)
+        # Default: the 6 canonical mu evaluators. A factory swaps in a benchmark-specific suite
+        # (e.g. benchmarks.arc_challenge.build_arc_evaluator_pool).
+        self.evaluator_pool = (
+            evaluator_pool_factory(self.llm_client) if evaluator_pool_factory else EvaluatorPool(llm_client=self.llm_client)
+        )
         self.metric_names = self.evaluator_pool.get_evaluator_names()
         self.bayesian_optimizer = BayesianWeightOptimizer(metric_names=self.metric_names)
         self.mutator = PromptMutator(llm_client=self.llm_client)
@@ -118,19 +124,10 @@ class EvolutionController:
         uniform_weights = {name: 1.0 / len(self.metric_names) for name in self.metric_names}
         full_subset = self.evaluator_pool.get_evaluator_names()
 
-        # Evaluate seed agent across benchmark
-        benchmark = self._resolve_task(task_id)
-        exec_start = time.time()
-        agent_solution = self._execute_agent_on_task(seed_agent, benchmark)
-        exec_time_ms = (time.time() - exec_start) * 1000
-
-        scores, costs, details = self.evaluator_pool.evaluate_subset(
-            agent=seed_agent,
-            task=self._task_to_dict(benchmark),
-            agent_output=agent_solution,
-            active_subset=full_subset,
-            execution_context={"generation_latency_ms": exec_time_ms},
-        )
+        # Evaluate seed agent across benchmark (one task, or every task of a whole benchmark)
+        selector, tasks = self._resolve_tasks(task_id)
+        run = self._run_agent_on_tasks(seed_agent, tasks)
+        scores, costs, per_task = self._evaluate_run(seed_agent, tasks, run, full_subset)
 
         fitness, spent_cost = calculate_cost_penalized_fitness(
             evaluator_scores=scores,
@@ -139,25 +136,22 @@ class EvolutionController:
             lambda_penalty=self.lambda_penalty,
         )
 
-        seed_agent.metrics = scores
-        seed_agent.fitness = fitness
-        seed_agent.cost_spent = spent_cost
-        seed_agent.active_evaluators = full_subset
-        seed_agent.last_solution = agent_solution
-        seed_agent.task_id = benchmark.id
+        self._record_run_on_agent(seed_agent, selector, tasks, run, scores, fitness, spent_cost, full_subset, per_task)
+        agent_solution = seed_agent.last_solution
+        naive_cost = self.evaluator_pool.get_full_eval_cost() * len(tasks)
 
         self.cumulative_adaptive_cost += spent_cost
-        self.cumulative_naive_cost += self.evaluator_pool.get_full_eval_cost()
+        self.cumulative_naive_cost += naive_cost
 
         self.archive.add_agent(
             seed_agent,
             generation_metadata={
                 "strategy": "seed",
-                "naive_cost_spent": self.evaluator_pool.get_full_eval_cost(),
+                "naive_cost_spent": naive_cost,
                 "cost_saved_this_gen": 0.0,
                 "cumulative_adaptive_cost": self.cumulative_adaptive_cost,
                 "cumulative_naive_cost": self.cumulative_naive_cost,
-                "task_id": benchmark.id,
+                "task_id": selector,
                 "delta_f": 0.0,
                 "weights": {k: round(v, 3) for k, v in uniform_weights.items()},
                 "solution_preview": agent_solution[:100] + "..." if len(agent_solution) > 100 else agent_solution,
@@ -176,23 +170,101 @@ class EvolutionController:
             "fitness": fitness,
             "delta_f": 0.0,
             "cost_spent": spent_cost,
-            "naive_cost": self.evaluator_pool.get_full_eval_cost(),
+            "naive_cost": naive_cost,
             "active_evaluators": full_subset,
             "weights": uniform_weights,
             "metrics": scores,
-            "task_id": benchmark.id,
+            "task_id": selector,
+            "task_metrics": dict(seed_agent.task_metrics),
             "mutation_type": seed_agent.mutation_type,
             "mutation_goal": seed_agent.mutation_description,
         }
         self.history_records.append(seed_record)
 
-    def _resolve_task(self, task_param: Optional[str] = None) -> BenchmarkTask:
+    # ------------------------------------------------------------------ task resolution & multi-task runs
+
+    def _resolve_tasks(self, task_param: Optional[str] = None) -> Tuple[str, List[BenchmarkTask]]:
+        """Resolves the selector to (record id, tasks). A whole benchmark (e.g. `arc_benchmark`) yields
+        every one of its tasks; a single task yields [task]; anything else a random canonical task."""
         target = task_param or self.selected_task_id
         if target and target != "All Benchmark Tasks (Suite / Random)":
-            found = get_benchmark_task(target)
-            if found:
-                return found
-        return get_random_task()
+            tasks = get_benchmark_tasks(target)
+            if tasks:
+                return (ARC_BENCHMARK_ID if is_arc_benchmark(target) else tasks[0].id), tasks
+        task = get_random_task()
+        return task.id, [task]
+
+    def _run_agent_on_tasks(self, agent: Agent, tasks: List[BenchmarkTask]) -> Dict[str, Dict[str, Any]]:
+        """Calls the agent LLM once per task. Returns {task_id: {"solution", "latency_ms"}}."""
+        run: Dict[str, Dict[str, Any]] = {}
+        for task in tasks:
+            start = time.time()
+            solution = self._execute_agent_on_task(agent, task)
+            run[task.id] = {"solution": solution, "latency_ms": (time.time() - start) * 1000}
+        return run
+
+    def _evaluate_run(
+        self,
+        agent: Agent,
+        tasks: List[BenchmarkTask],
+        run: Dict[str, Dict[str, Any]],
+        active_subset: List[str],
+    ) -> Tuple[Dict[str, float], List[float], Dict[str, Dict[str, float]]]:
+        """Runs the active evaluator subset on every task of the run.
+
+        Returns (mean scores across tasks, costs summed across tasks, per-task scores).
+        For ARC this makes `arc_pass_at_2_test` the fraction of the benchmark solved, i.e. the official score.
+        """
+        per_task: Dict[str, Dict[str, float]] = {}
+        cost_totals: Dict[str, float] = {}
+        for task in tasks:
+            r = run[task.id]
+            scores, costs, _ = self.evaluator_pool.evaluate_subset(
+                agent=agent,
+                task=self._task_to_dict(task),
+                agent_output=r["solution"],
+                active_subset=active_subset,
+                execution_context={"generation_latency_ms": r["latency_ms"]},
+            )
+            per_task[task.id] = scores
+            for name, cost in zip([n for n in active_subset if n in scores], costs):
+                cost_totals[name] = cost_totals.get(name, 0.0) + cost
+
+        n = max(1, len(tasks))
+        mean_scores = {
+            name: round(sum(per_task[t.id].get(name, 0.0) for t in tasks) / n, 4)
+            for name in active_subset
+            if any(name in per_task[t.id] for t in tasks)
+        }
+        summed_costs = [cost_totals[name] for name in mean_scores]
+        return mean_scores, summed_costs, per_task
+
+    @staticmethod
+    def _record_run_on_agent(
+        agent: Agent,
+        selector: str,
+        tasks: List[BenchmarkTask],
+        run: Dict[str, Dict[str, Any]],
+        scores: Dict[str, float],
+        fitness: float,
+        spent_cost: float,
+        active_subset: List[str],
+        per_task: Optional[Dict[str, Dict[str, float]]] = None,
+    ) -> None:
+        agent.metrics = scores
+        agent.fitness = fitness
+        agent.cost_spent = spent_cost
+        agent.active_evaluators = active_subset
+        agent.task_id = selector
+        agent.task_solutions = {tid: r["solution"] for tid, r in run.items()}
+        agent.task_metrics = dict(per_task or {})
+        if len(tasks) == 1:
+            agent.last_solution = run[tasks[0].id]["solution"]
+        else:
+            # Whole-benchmark run: keep every program, separated by task headers, for the inspector views
+            agent.last_solution = "\n\n".join(
+                f"# ===== {tid} =====\n{r['solution']}" for tid, r in run.items()
+            )
 
     def run_generation(self, strategy: Optional[str] = None, task_id: Optional[str] = None) -> Dict[str, Any]:
         """Runs a single generation step of the multi-objective optimization loop across 5 conditions."""
@@ -224,30 +296,21 @@ class EvolutionController:
         else:  # no_pruning, full_adaptive
             weights = self.sampler.sample_weights()
 
-        # 4. Select Benchmark Task
-        task = self._resolve_task(task_id)
-        task_dict = self._task_to_dict(task)
+        # 4. Select Benchmark Task(s): a single task, or every task of a whole benchmark (e.g. ARC)
+        selector, tasks = self._resolve_tasks(task_id)
 
-        # 5. Execute Agent on Task
-        exec_start = time.time()
-        agent_solution = self._execute_agent_on_task(child, task)
-        exec_time_ms = (time.time() - exec_start) * 1000
+        # 5. Execute Agent on each task
+        run = self._run_agent_on_tasks(child, tasks)
 
         # 6. Active Evaluators determination
         if active_strategy == "single_metric":
-            active_evaluators = ["mu_1_correctness"]
+            active_evaluators = [self.metric_names[0]] if "mu_1_correctness" not in self.metric_names else ["mu_1_correctness"]
         elif active_strategy in ["ucb1_bandit", "no_pruning"]:
             active_evaluators = list(self.metric_names)
         else:  # static_cascade, full_adaptive
-            # Multi-tier selective search: run Core first
+            # Multi-tier selective search: run Core first (averaged over the run's tasks)
             core_evals = self.evaluator_pool.get_evaluators_by_tier("core")
-            core_scores, core_costs, _ = self.evaluator_pool.evaluate_subset(
-                agent=child,
-                task=task_dict,
-                agent_output=agent_solution,
-                active_subset=core_evals,
-                execution_context={"generation_latency_ms": exec_time_ms},
-            )
+            core_scores, _core_costs, _ = self._evaluate_run(child, tasks, run, core_evals)
             # Preview score across core metrics
             core_preview = sum(core_scores.values()) / max(1, len(core_scores))
             active_evaluators = self.sampler.determine_active_evaluator_subset(
@@ -255,14 +318,8 @@ class EvolutionController:
                 core_score_preview=core_preview,
             )
 
-        # 7. Run evaluation on active evaluators
-        scores, costs, details = self.evaluator_pool.evaluate_subset(
-            agent=child,
-            task=task_dict,
-            agent_output=agent_solution,
-            active_subset=active_evaluators,
-            execution_context={"generation_latency_ms": exec_time_ms},
-        )
+        # 7. Run evaluation on active evaluators (scores averaged, costs summed across tasks)
+        scores, costs, per_task = self._evaluate_run(child, tasks, run, active_evaluators)
 
         # 8. Cost-Penalized Fitness Score
         fitness, spent_cost = calculate_cost_penalized_fitness(
@@ -283,16 +340,12 @@ class EvolutionController:
             self.bandit.update(arm_name=mut_type, reward=delta_f)
 
         # 10. Update telemetry and archive
-        full_naive_cost = self.evaluator_pool.get_full_eval_cost()
+        full_naive_cost = self.evaluator_pool.get_full_eval_cost() * len(tasks)
         self.cumulative_adaptive_cost += spent_cost
         self.cumulative_naive_cost += full_naive_cost
 
-        child.metrics = scores
-        child.fitness = fitness
-        child.cost_spent = spent_cost
-        child.active_evaluators = active_evaluators
-        child.last_solution = agent_solution
-        child.task_id = task.id
+        self._record_run_on_agent(child, selector, tasks, run, scores, fitness, spent_cost, active_evaluators, per_task)
+        agent_solution = child.last_solution
 
         gen_metadata = {
             "strategy": active_strategy,
@@ -302,7 +355,7 @@ class EvolutionController:
             "cost_saved_this_gen": round(full_naive_cost - spent_cost, 6),
             "cumulative_adaptive_cost": round(self.cumulative_adaptive_cost, 6),
             "cumulative_naive_cost": round(self.cumulative_naive_cost, 6),
-            "task_id": task.id,
+            "task_id": selector,
             "solution_preview": agent_solution[:100] + "..." if len(agent_solution) > 100 else agent_solution,
         }
         self.archive.add_agent(child, generation_metadata=gen_metadata)
@@ -323,7 +376,8 @@ class EvolutionController:
             "active_evaluators": active_evaluators,
             "weights": weights,
             "metrics": scores,
-            "task_id": task.id,
+            "task_id": selector,
+            "task_metrics": dict(per_task),
             "mutation_type": child.mutation_type,
             "mutation_goal": mut_goal,
         }
