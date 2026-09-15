@@ -1,12 +1,15 @@
 """ARC-AGI (Abstraction and Reasoning Corpus) benchmark adapted to BenchmarkTask."""
 
 from .loader import (
+    ARC_BENCHMARK_ID,
+    ARC_BENCHMARK_NAME,
     ARC_DATA_ROOT,
     ARC_TASKS,
     DEFAULT_DATA_ROOT,
     arc_task_to_benchmark,
     available_splits,
     get_arc_task,
+    is_arc_benchmark,
     load_arc_task_file,
     load_arc_tasks,
     load_kaggle_split,
@@ -42,12 +45,15 @@ from .viz import (
 )
 
 __all__ = [
+    "ARC_BENCHMARK_ID",
+    "ARC_BENCHMARK_NAME",
     "ARC_DATA_ROOT",
     "ARC_TASKS",
     "DEFAULT_DATA_ROOT",
     "arc_task_to_benchmark",
     "available_splits",
     "get_arc_task",
+    "is_arc_benchmark",
     "load_arc_task_file",
     "load_arc_tasks",
     "load_kaggle_split",

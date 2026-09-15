@@ -96,16 +96,35 @@ Example on task `c8f0f002` (recolour 7→5) with a program that applies the rule
 The default `EvolutionController` still uses the 6 canonical μ evaluators (μ₁/μ₅ compare grids exactly, so ARC
 tasks work there too). Opt into the ARC suite with `evaluator_pool_factory`:
 
+## Running ARC as one benchmark
+
+ARC is selected as a single benchmark (`arc_benchmark` / "ARC-AGI Benchmark (all loaded tasks)"), never as
+individual puzzles. Each generation the candidate agent is run on **every loaded task** (one LLM call per task),
+each task is scored by the active evaluator subset, and then:
+
+- **scores are averaged across tasks** — so `arc_pass_at_2_test` is the fraction of the benchmark solved, i.e.
+  the official ARC score (for tasks with two held-out inputs, both must match to count as 1.0);
+- **evaluator costs are summed across tasks** — naive cost is `pool cost × n_tasks`, so the cost-penalty and
+  pruning telemetry stay honest;
+- per-task programs and scores are kept on the agent (`task_solutions`, `task_metrics`) and in the generation
+  record (`task_metrics`) behind the averaged `metrics`.
+
+The bundled sample is 4 tasks. With a full Kaggle download (`ARC_DATA_ROOT`) that is 120–1000 LLM calls per
+generation; use `ARC_TASK_FILE=evaluation` and `ARC_TASK_LIMIT=N` to cap it.
+
 ## Visualisation (Streamlit)
 
-`streamlit run app.py` → sidebar **Evaluator Suite → ARC-AGI (3 real + 3 partial)**, pick an `ARC …` task, run
-generations, open the **ARC BENCHMARK: Grid Results** tab:
+`uv run streamlit run app.py` → sidebar **Evaluator Suite → ARC-AGI (3 real + 3 partial)**, pick
+**ARC-AGI Benchmark (all loaded tasks)**, run generations, open the **ARC BENCHMARK: Grid Results** tab:
 
-- **Grid gallery** — one row per demonstration / held-out pair: Input | Expected | Predicted, drawn in the
-  official ARC colour palette. Titles show `✓ exact` or `✗ NN% px`; if only `transform_grid_attempt_2` is
-  correct, that attempt is shown so the pass@2 credit is visible.
+- **Benchmark KPIs** — averaged pass@2 (demonstrations / held-out with "k / n tasks solved"), pixel accuracy,
+  fitness. A metric the selective search pruned for that candidate shows `— (pruned)`, never a fake 0.00.
+- **Per-task table** — every task's scores for the selected candidate with a `Solved` flag.
+- **Grid gallery** — pick a task of the run; one row per demonstration / held-out pair: Input | Expected |
+  Predicted, drawn in the official ARC colour palette. Titles show `✓ exact` or `✗ NN% px`; if only
+  `transform_grid_attempt_2` is correct, that attempt is shown so the pass@2 credit is visible.
 - **ARC scores over generations** — real metrics as solid lines, AI-generated partial-credit ones dashed.
-- **Best-so-far per ARC task** — pass@2 train/test, partial scores and an official `Solved` flag.
+- **Best-so-far per ARC task** — across all candidates, with an official `Solved` flag.
 
 The rest of the dashboard follows the active suite: tier captions, active-evaluator counts, GP target metric,
 activation heatmap and the Pareto scatter (axes become pass@2-train × pixel-accuracy). Switching suites rebuilds
@@ -116,14 +135,16 @@ the controller, since the GP and archive are keyed on the metric set. The functi
 
 ```python
 from benchmarks.arc_challenge import (
-    ARC_TASKS, build_arc_evaluator_pool, get_arc_task, load_arc_tasks, load_kaggle_split, score_arc_program,
+    ARC_BENCHMARK_ID, ARC_TASKS, build_arc_evaluator_pool, get_arc_task, load_arc_tasks, load_kaggle_split,
+    score_arc_program,
 )
 from controller import EvolutionController
 
-# ARC evaluator suite (3 real + 3 partial). Bundled tasks are also reachable through the normal
-# task lookup and the Streamlit dropdown (which keeps the canonical 6-evaluator pool).
-ctrl = EvolutionController(selected_task_id="arc_00576224", evaluator_pool_factory=build_arc_evaluator_pool)
-ctrl.run_generation()
+# Whole ARC benchmark per generation with the ARC evaluator suite (3 real + 3 partial)
+ctrl = EvolutionController(selected_task_id=ARC_BENCHMARK_ID, evaluator_pool_factory=build_arc_evaluator_pool)
+rec = ctrl.run_generation()
+# rec["metrics"]["arc_pass_at_2_test"]  -> fraction of tasks solved (official score)
+# rec["task_metrics"]["arc_00576224"]   -> that task's scores
 # ctrl.metric_names == ['arc_runs_successfully', 'arc_pass_at_2_train', 'arc_pass_at_2_test',
 #                       'arc_pixel_accuracy', 'arc_shape_match', 'arc_color_palette']
 

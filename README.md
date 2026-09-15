@@ -112,9 +112,11 @@ multi-evaluator-agent-optimization/
 ## Quickstart & Setup
 
 ### 1. Install Dependencies
+The project is managed with [uv](https://docs.astral.sh/uv/) (`pyproject.toml`):
 ```bash
-pip install -r requirements.txt
+uv sync
 ```
+(`pip install -r requirements.txt` still works if you prefer a plain virtualenv.)
 
 ### 2. Set Groq API Key
 The system automatically reads your API key from `.env` or system environment variables:
@@ -126,7 +128,12 @@ If no key is provided, the framework operates in offline mock simulation mode.
 
 ### 3. Launch Streamlit Web UI
 ```bash
-streamlit run app.py
+uv run streamlit run app.py
+```
+
+### 4. Run the tests
+```bash
+uv run pytest
 ```
 
 ---

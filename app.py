@@ -10,10 +10,13 @@ from controller import EvolutionController
 from core.agent import AGENT_ARCHETYPES
 from benchmarks.benchmark_tasks import BENCHMARK_TASKS
 from benchmarks.arc_challenge import (
+    ARC_BENCHMARK_ID,
+    ARC_BENCHMARK_NAME,
     ARC_TASKS,
     benchmark_summary_frame,
     build_arc_evaluator_pool,
     get_arc_task,
+    is_arc_benchmark,
     pass_at_2_trajectory_figure,
     task_gallery_figure,
 )
@@ -185,11 +188,12 @@ with st.sidebar:
     st.markdown("---")
     st.markdown("### Selectable Benchmark Task")
 
-    task_choices = ["All Benchmark Tasks (Suite / Random)"] + [t.name for t in BENCHMARK_TASKS] + [t.name for t in ARC_TASKS]
+    # The ARC set is offered as ONE benchmark: every loaded task is run per generation and scores are averaged.
+    task_choices = ["All Benchmark Tasks (Suite / Random)"] + [t.name for t in BENCHMARK_TASKS] + [ARC_BENCHMARK_NAME]
     current_task_idx = 0
     if ctrl.selected_task_id:
         for idx, t_name in enumerate(task_choices):
-            if t_name == ctrl.selected_task_id:
+            if t_name == ctrl.selected_task_id or (t_name == ARC_BENCHMARK_NAME and is_arc_benchmark(ctrl.selected_task_id)):
                 current_task_idx = idx
                 break
 
@@ -197,12 +201,23 @@ with st.sidebar:
         "Benchmark Problem / Task Input",
         options=task_choices,
         index=current_task_idx,
-        help="Select a specific coding/reasoning problem (e.g. Stock Exchange, Fibonacci, or an ARC-AGI grid puzzle) or test across the full suite.",
+        help="Select a specific coding/reasoning problem (e.g. Stock Exchange, Fibonacci), the whole ARC-AGI benchmark, or test across the full suite.",
     )
-    ctrl.selected_task_id = None if selected_task_name == "All Benchmark Tasks (Suite / Random)" else selected_task_name
-    
-    if selected_task_name != "All Benchmark Tasks (Suite / Random)":
-        matched_task = next((t for t in BENCHMARK_TASKS + ARC_TASKS if t.name == selected_task_name), None)
+    if selected_task_name == "All Benchmark Tasks (Suite / Random)":
+        ctrl.selected_task_id = None
+    elif selected_task_name == ARC_BENCHMARK_NAME:
+        ctrl.selected_task_id = ARC_BENCHMARK_ID
+    else:
+        ctrl.selected_task_id = selected_task_name
+
+    if selected_task_name == ARC_BENCHMARK_NAME:
+        st.caption(
+            f"**Category:** ARC-AGI Abstract Reasoning\n\n**Goal:** {len(ARC_TASKS)} grid task(s) per generation "
+            f"({', '.join(t.id.removeprefix('arc_') for t in ARC_TASKS)}); metrics are averaged across tasks, "
+            "so `arc_pass_at_2_test` = fraction of the benchmark solved. One LLM call per task per generation."
+        )
+    elif selected_task_name != "All Benchmark Tasks (Suite / Random)":
+        matched_task = next((t for t in BENCHMARK_TASKS if t.name == selected_task_name), None)
         if matched_task:
             st.caption(f"**Category:** {matched_task.category}\n\n**Goal:** {matched_task.description[:120]}...")
 
@@ -419,6 +434,8 @@ with tab_panelist:
                     h_label: a.metrics.get(h_key, 0.0),
                     "Cost ($)": a.cost_spent,
                     "Fitness": a.fitness,
+                    # Fitness can be negative (cost penalty on a zero-score candidate); marker sizes cannot.
+                    "Marker Size": max(a.fitness, 0.0) + 0.05,
                     "Pareto Status": "Pareto Optimal (Non-Dominated)" if a.id in pareto_ids else "Dominated Candidate",
                 })
             df_scatter = pd.DataFrame(scatter_data)
@@ -426,9 +443,9 @@ with tab_panelist:
                 df_scatter,
                 x=x_label,
                 y=y_label,
-                size="Fitness",
+                size="Marker Size",
                 color="Pareto Status",
-                hover_data=["Agent ID", "Generation", "Cost ($)", h_label],
+                hover_data={"Agent ID": True, "Generation": True, "Cost ($)": True, h_label: True, "Fitness": ":.4f", "Marker Size": False},
                 color_discrete_map={"Pareto Optimal (Non-Dominated)": "#DC2626", "Dominated Candidate": "#3B82F6"},
             )
             fig_p_scat.update_layout(height=360, margin=dict(l=30, r=30, t=30, b=30))
@@ -641,8 +658,8 @@ with tab_arc:
     arc_agents = [a for a in ctrl.archive.get_all_agents() if a.task_id and str(a.task_id).startswith("arc_")]
     if not arc_agents:
         st.info(
-            "No ARC candidates yet. In the sidebar pick an `ARC …` task (and optionally the ARC-AGI evaluator suite), "
-            "then run generations."
+            f"No ARC candidates yet. In the sidebar pick **{ARC_BENCHMARK_NAME}** (and optionally the ARC-AGI "
+            "evaluator suite), then run generations."
         )
     else:
         # Candidate selector, defaulting to the best ARC agent
@@ -657,31 +674,64 @@ with tab_arc:
             index=arc_agents.index(best_arc),
         )
         arc_agent = arc_agents[sel_idx]
-        arc_task = get_arc_task(arc_agent.task_id)
 
-        if arc_task is None:
-            st.warning(f"Task `{arc_agent.task_id}` is not loaded (check ARC_DATA_ROOT / ARC_TASK_FILE).")
-        elif not arc_agent.last_solution:
-            st.info("No solution cached for this candidate.")
+        # Benchmark-level KPIs (averaged over every task in the run). A metric the selective search pruned
+        # from this candidate's active subset was never computed: show "—", not a fake 0.00.
+        k1, k2, k3, k4 = st.columns(4)
+        m = arc_agent.metrics or {}
+        n_tasks = len(arc_agent.task_metrics) or 1
+
+        def _kpi(*keys: str) -> str:
+            for k in keys:
+                if k in m:
+                    return f"{m[k]:.2f}"
+            return "— (pruned)"
+
+        with k1:
+            st.metric("Pass@2 — demonstrations", _kpi("arc_pass_at_2_train", "mu_1_correctness"))
+        with k2:
+            held_out_key = next((k for k in ("arc_pass_at_2_test", "mu_5_edge_cases") if k in m), None)
+            solved_note = None
+            if held_out_key and arc_agent.task_metrics:
+                solved = sum(1 for tm in arc_agent.task_metrics.values() if tm.get(held_out_key, 0.0) >= 1.0)
+                solved_note = f"{solved} / {n_tasks} tasks solved"
+            st.metric("Pass@2 — held-out (official)", _kpi("arc_pass_at_2_test", "mu_5_edge_cases"), solved_note, delta_color="off")
+        with k3:
+            st.metric("Pixel accuracy (partial)", _kpi("arc_pixel_accuracy"))
+        with k4:
+            st.metric("Fitness F", f"{arc_agent.fitness:.4f}")
+
+        # Per-task breakdown for whole-benchmark runs
+        if arc_agent.task_metrics:
+            st.markdown("##### Per-task scores (this candidate)")
+            df_tasks = pd.DataFrame.from_dict(arc_agent.task_metrics, orient="index").rename_axis("Task").reset_index()
+            if "arc_pass_at_2_test" in df_tasks.columns:
+                df_tasks.insert(1, "Solved", df_tasks["arc_pass_at_2_test"] >= 1.0)
+            st.dataframe(df_tasks, use_container_width=True, hide_index=True)
+
+        # Grid gallery: pick which task of the run to draw
+        solutions = arc_agent.task_solutions or ({arc_agent.task_id: arc_agent.last_solution} if arc_agent.last_solution else {})
+        task_ids = [tid for tid in solutions if get_arc_task(tid) is not None]
+        if not task_ids:
+            st.warning("No loaded ARC task matches this candidate's solutions (check ARC_DATA_ROOT / ARC_TASK_FILE).")
         else:
-            k1, k2, k3, k4 = st.columns(4)
-            m = arc_agent.metrics or {}
-            with k1:
-                st.metric("Pass@2 — demonstrations", f"{m.get('arc_pass_at_2_train', m.get('mu_1_correctness', 0.0)):.2f}")
-            with k2:
-                st.metric("Pass@2 — held-out (official)", f"{m.get('arc_pass_at_2_test', m.get('mu_5_edge_cases', 0.0)):.2f}")
-            with k3:
-                st.metric("Pixel accuracy (partial)", f"{m.get('arc_pixel_accuracy', float('nan')):.2f}")
-            with k4:
-                st.metric("Fitness F", f"{arc_agent.fitness:.4f}")
+            def _task_label(tid: str) -> str:
+                tm = arc_agent.task_metrics.get(tid, {})
+                p2 = tm.get("arc_pass_at_2_test", tm.get("mu_5_edge_cases"))
+                mark = "" if p2 is None else (" ✓" if p2 >= 1.0 else " ✗")
+                return f"{get_arc_task(tid).name}{mark}"
+
+            gallery_tid = st.selectbox("Task to draw", options=task_ids, format_func=_task_label) if len(task_ids) > 1 else task_ids[0]
+            arc_task = get_arc_task(gallery_tid)
+            program = solutions[gallery_tid]
 
             st.markdown(f"##### {arc_task.name}")
             st.caption(f"{len(arc_task.test_cases)} demonstration pair(s), {len(arc_task.edge_cases)} held-out pair(s). "
                        "Predicted shows attempt 1 (or `solve`); attempt 2 is shown when only it is correct.")
-            st.plotly_chart(task_gallery_figure(arc_task, arc_agent.last_solution), use_container_width=True)
+            st.plotly_chart(task_gallery_figure(arc_task, program), use_container_width=True)
 
-            with st.expander("Candidate program", expanded=False):
-                st.code(arc_agent.last_solution, language="python")
+            with st.expander("Candidate program for this task", expanded=False):
+                st.code(program, language="python")
 
         st.markdown("---")
         c_traj, c_sum = st.columns([3, 2])

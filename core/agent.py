@@ -114,6 +114,9 @@ class Agent:
     lineage_path: List[str] = field(default_factory=list)
     last_solution: str = ""
     task_id: Optional[str] = None
+    # Multi-task benchmarks (e.g. the whole ARC set): per-task outputs and scores behind the averaged `metrics`
+    task_solutions: Dict[str, str] = field(default_factory=dict)
+    task_metrics: Dict[str, Dict[str, float]] = field(default_factory=dict)
     created_at: float = field(default_factory=time.time)
 
     def __post_init__(self):
@@ -137,6 +140,8 @@ class Agent:
             "lineage_path": self.lineage_path,
             "last_solution": self.last_solution,
             "task_id": self.task_id,
+            "task_solutions": self.task_solutions,
+            "task_metrics": self.task_metrics,
             "created_at": self.created_at,
         }
 

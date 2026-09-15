@@ -158,19 +158,25 @@ def pass_at_2_trajectory_figure(records: Iterable[Dict[str, Any]]) -> go.Figure:
 
 
 def benchmark_summary_frame(agents: Iterable[Any]) -> pd.DataFrame:
-    """Best-so-far ARC metrics per task across archive agents (task ids starting with `arc_`)."""
+    """Best-so-far ARC metrics per task across archive agents (task ids starting with `arc_`).
+
+    Whole-benchmark agents (`task_id == arc_benchmark`) are expanded into one row per task
+    using their `task_metrics`; single-task agents contribute their `metrics` directly.
+    """
     rows: Dict[str, Dict[str, Any]] = {}
     for a in agents:
         tid = getattr(a, "task_id", None)
         if not tid or not str(tid).startswith("arc_") or not getattr(a, "metrics", None):
             continue
-        row = rows.setdefault(tid, {"Task": tid, "Candidates": 0, "Best Fitness": float("-inf"), "Best Agent": ""})
-        row["Candidates"] += 1
-        if a.fitness > row["Best Fitness"]:
-            row["Best Fitness"], row["Best Agent"] = a.fitness, a.id
-        for key in REAL_METRICS + PARTIAL_METRICS:
-            if key in a.metrics:
-                row[key] = max(row.get(key, 0.0), a.metrics[key])
+        per_task = getattr(a, "task_metrics", None) or {tid: a.metrics}
+        for task_id, metrics in per_task.items():
+            row = rows.setdefault(task_id, {"Task": task_id, "Candidates": 0, "Best Fitness": float("-inf"), "Best Agent": ""})
+            row["Candidates"] += 1
+            if a.fitness > row["Best Fitness"]:
+                row["Best Fitness"], row["Best Agent"] = a.fitness, a.id
+            for key in REAL_METRICS + PARTIAL_METRICS:
+                if key in metrics:
+                    row[key] = max(row.get(key, 0.0), metrics[key])
     df = pd.DataFrame(list(rows.values()))
     if df.empty:
         return df

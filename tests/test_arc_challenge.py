@@ -10,6 +10,8 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 from benchmarks.arc_challenge import (
     AI_GENERATED_HEADER,
+    ARC_BENCHMARK_ID,
+    ARC_BENCHMARK_NAME,
     ARC_TASKS,
     DEFAULT_DATA_ROOT,
     PARTIAL_ARC_EVALUATORS,
@@ -24,6 +26,7 @@ from benchmarks.arc_challenge import (
     available_splits,
     build_arc_evaluator_pool,
     get_arc_task,
+    is_arc_benchmark,
     load_arc_tasks,
     load_kaggle_split,
     pass_at_2_single,
@@ -33,7 +36,7 @@ from benchmarks.arc_challenge import (
 from controller import EvolutionController
 from core.groq_client import GroqLLMClient
 from evaluation.runner import CodeExecutionRunner
-from benchmarks.benchmark_tasks import BENCHMARK_TASKS, get_benchmark_task
+from benchmarks.benchmark_tasks import BENCHMARK_TASKS, get_benchmark_task, get_benchmark_tasks
 
 
 class TestArcChallengeBenchmark(unittest.TestCase):
@@ -241,6 +244,60 @@ class TestArcChallengeBenchmark(unittest.TestCase):
         self.assertTrue(set(rec["metrics"]) <= set(pool.get_evaluator_names()))
         self.assertIn("arc_pass_at_2_train", ctrl.archive.to_detailed_dataframe().columns)
 
+    def test_whole_arc_benchmark_run(self):
+        """`arc_benchmark` runs EVERY loaded ARC task per generation; scores are averaged, costs summed."""
+        self.assertEqual([t.id for t in get_benchmark_tasks(ARC_BENCHMARK_ID)], [t.id for t in ARC_TASKS])
+        self.assertEqual(len(get_benchmark_tasks(ARC_BENCHMARK_NAME)), len(ARC_TASKS))
+        self.assertEqual(len(get_benchmark_tasks("he_055_fib")), 1)
+        self.assertEqual(get_benchmark_tasks("nope"), [])
+        self.assertTrue(is_arc_benchmark(ARC_BENCHMARK_ID) and is_arc_benchmark(ARC_BENCHMARK_NAME))
+        self.assertFalse(is_arc_benchmark("arc_00576224"))
+
+        ctrl = EvolutionController(
+            is_mock=True, inter_call_delay=0.0, selected_task_id=ARC_BENCHMARK_ID,
+            evaluator_pool_factory=build_arc_evaluator_pool,
+        )
+        n = len(ARC_TASKS)
+        seed = ctrl.archive.get_all_agents()[0]
+        self.assertEqual(seed.task_id, ARC_BENCHMARK_ID)
+        self.assertEqual(set(seed.task_solutions), {t.id for t in ARC_TASKS})
+        self.assertEqual(set(seed.task_metrics), {t.id for t in ARC_TASKS})
+        # naive cost of the seed generation = full pool cost x number of tasks
+        self.assertAlmostEqual(ctrl.cumulative_naive_cost, ctrl.evaluator_pool.get_full_eval_cost() * n)
+
+        rec = ctrl.run_generation(strategy="no_pruning")  # all evaluators active -> costs are deterministic
+        self.assertEqual(rec["task_id"], ARC_BENCHMARK_ID)
+        self.assertEqual(set(rec["task_metrics"]), {t.id for t in ARC_TASKS})
+        self.assertEqual(rec["metrics"]["arc_pass_at_2_test"], 1.0)  # mock solves all bundled tasks
+        self.assertAlmostEqual(rec["cost_spent"], ctrl.evaluator_pool.get_full_eval_cost() * n)
+        self.assertAlmostEqual(rec["naive_cost"], ctrl.evaluator_pool.get_full_eval_cost() * n)
+
+        child = ctrl.archive.get_all_agents()[-1]
+        self.assertEqual(len(child.task_solutions), n)
+        for tid in child.task_solutions:
+            self.assertIn(f"# ===== {tid} =====", child.last_solution)
+        # averaged metric == mean of per-task metrics
+        mean_pix = sum(m["arc_pixel_accuracy"] for m in child.task_metrics.values()) / n
+        self.assertAlmostEqual(child.metrics["arc_pixel_accuracy"], mean_pix, places=4)
+
+        # Summary expands the benchmark agent into per-task rows
+        from benchmarks.arc_challenge import benchmark_summary_frame
+        df = benchmark_summary_frame(ctrl.archive.get_all_agents())
+        self.assertEqual(sorted(df["Task"]), sorted(t.id for t in ARC_TASKS))
+        self.assertTrue(df["Solved (official)"].all())
+
+        # Averaging is real: a program wrong on one task lowers the benchmark score proportionally
+        from unittest import mock
+        good = ctrl.llm_client.generate
+        def broken_on_one(system_prompt, user_prompt, **kw):
+            if "arc-agi task c8f0f002" in user_prompt.lower():
+                return "```python\ndef solve(grid):\n    return grid\n```"
+            return good(system_prompt, user_prompt, **kw)
+        with mock.patch.object(ctrl.llm_client, "generate", side_effect=broken_on_one):
+            rec2 = ctrl.run_generation(strategy="no_pruning")
+        self.assertAlmostEqual(rec2["metrics"]["arc_pass_at_2_test"], (n - 1) / n, places=4)
+        self.assertEqual(rec2["task_metrics"]["arc_c8f0f002"]["arc_pass_at_2_test"], 0.0)
+
 
 if __name__ == "__main__":
     unittest.main()
@@ -315,7 +372,9 @@ class TestArcVisualisation(unittest.TestCase):
     def test_streamlit_arc_flow(self):
         from streamlit.testing.v1 import AppTest
 
-        os.environ.pop("GROQ_API_KEY", None)  # force mock mode
+        # Force mock mode. Set to "" rather than pop: app.py triggers load_dotenv(), which would
+        # re-read a real key from .env, but never overrides a variable that is already set.
+        os.environ["GROQ_API_KEY"] = ""
         at = AppTest.from_file(os.path.join(os.path.dirname(__file__), "..", "app.py"), default_timeout=120)
         at.run()
         self.assertFalse(at.exception, at.exception)
@@ -327,16 +386,43 @@ class TestArcVisualisation(unittest.TestCase):
         self.assertEqual(ctrl.metric_names[:3], ["arc_runs_successfully", "arc_pass_at_2_train", "arc_pass_at_2_test"])
         self.assertTrue(any("arc_pass_at_2_test" in c.value for c in at.sidebar.caption))
 
+        # ARC is offered as ONE benchmark entry, never as individual tasks
         task_box = next(s for s in at.sidebar.selectbox if "Benchmark Problem" in s.label)
-        task_box.set_value(next(o for o in task_box.options if o.startswith("ARC 00576224"))).run()
+        self.assertIn(ARC_BENCHMARK_NAME, task_box.options)
+        self.assertFalse(any(o.startswith("ARC 0") for o in task_box.options))
+        task_box.set_value(ARC_BENCHMARK_NAME).run()
+        self.assertEqual(at.session_state["controller"].selected_task_id, ARC_BENCHMARK_ID)
         at.sidebar.button[0].click().run()  # Run 1 Gen
         self.assertFalse(at.exception, at.exception)
 
         ctrl = at.session_state["controller"]
         self.assertEqual(ctrl.current_generation, 1)
-        self.assertEqual(ctrl.history_records[-1]["task_id"], "arc_00576224")
-        self.assertIn("Candidate to visualise", [s.label for s in at.selectbox])
-        shown = {m.label: m.value for m in at.metric}
-        self.assertEqual(shown.get("Pass@2 — held-out (official)"), "1.00")
+        self.assertEqual(ctrl.history_records[-1]["task_id"], ARC_BENCHMARK_ID)
+        self.assertEqual(set(ctrl.history_records[-1]["task_metrics"]), {t.id for t in ARC_TASKS})
+        labels = [s.label for s in at.selectbox]
+        self.assertIn("Candidate to visualise", labels)
+        self.assertIn("Task to draw", labels)  # per-task gallery picker for a whole-benchmark candidate
+        shown = {m.label: (m.value, m.delta) for m in at.metric}
+        # The visualised candidate is the best-fitness ARC agent; adaptive pruning may have skipped the deep
+        # tier for it, in which case the KPI must say so rather than show a fake 0.00.
+        best = max((a for a in ctrl.archive.get_all_agents() if a.task_id == ARC_BENCHMARK_ID), key=lambda a: a.fitness)
+        if "arc_pass_at_2_test" in best.metrics:
+            self.assertEqual(shown["Pass@2 — held-out (official)"], ("1.00", f"{len(ARC_TASKS)} / {len(ARC_TASKS)} tasks solved"))
+        else:
+            self.assertEqual(shown["Pass@2 — held-out (official)"][0], "— (pruned)")
+        self.assertEqual(shown["Pass@2 — demonstrations"][0], "1.00")  # core tier always runs
         self.assertEqual(at.error, [])
         self.assertEqual(at.warning, [])
+
+    def test_streamlit_pareto_survives_negative_fitness(self):
+        """Regression: px.scatter(size=...) crashed on negative fitness (cost penalty on zero-score agents)."""
+        from streamlit.testing.v1 import AppTest
+
+        os.environ["GROQ_API_KEY"] = ""  # see test_streamlit_arc_flow
+        at = AppTest.from_file(os.path.join(os.path.dirname(__file__), "..", "app.py"), default_timeout=120)
+        at.run()
+        ctrl = at.session_state["controller"]
+        for a in ctrl.archive.get_all_agents():
+            a.fitness = -0.004
+        at.run()
+        self.assertFalse(at.exception, at.exception)

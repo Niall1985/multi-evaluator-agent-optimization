@@ -29,10 +29,15 @@ from benchmarks.benchmark_tasks import BenchmarkTask
 Grid = List[List[int]]
 
 ARC_ID_PREFIX = "arc_"
+# The whole loaded ARC set run as ONE benchmark (every task per generation, scores averaged).
+ARC_BENCHMARK_ID = "arc_benchmark"
+ARC_BENCHMARK_NAME = "ARC-AGI Benchmark (all loaded tasks)"
 ARC_SPLITS = ("training", "evaluation", "test")
 DEFAULT_DATA_ROOT = Path(__file__).parent / "data"
 ARC_DATA_ROOT = Path(os.environ.get("ARC_DATA_ROOT", DEFAULT_DATA_ROOT))
 ARC_TASK_FILE: Optional[str] = os.environ.get("ARC_TASK_FILE") or None  # None = every split present
+_limit_env = os.environ.get("ARC_TASK_LIMIT")
+ARC_TASK_LIMIT: Optional[int] = int(_limit_env) if _limit_env else None  # cap tasks per split (cost control)
 
 # Human-readable labels for the bundled tasks (ARC-AGI-1 public data).
 ARC_TASK_LABELS: Dict[str, str] = {
@@ -175,8 +180,13 @@ def load_arc_tasks(
 
 
 ARC_TASKS: List[BenchmarkTask] = load_arc_tasks(
-    ARC_DATA_ROOT, splits=[ARC_TASK_FILE] if ARC_TASK_FILE else None
+    ARC_DATA_ROOT, splits=[ARC_TASK_FILE] if ARC_TASK_FILE else None, limit=ARC_TASK_LIMIT
 )
+
+
+def is_arc_benchmark(task_id: Optional[str]) -> bool:
+    """True for the whole-benchmark selector (by id or display name)."""
+    return task_id in (ARC_BENCHMARK_ID, ARC_BENCHMARK_NAME)
 
 
 def get_arc_task(task_id: str) -> Optional[BenchmarkTask]:
