@@ -10,7 +10,7 @@ from optimization.bayesian_weights import BayesianWeightOptimizer
 from optimization.scoring import calculate_cost_penalized_fitness, calculate_relative_improvement
 from optimization.joint_sampler import JointSearchSampler
 from optimization.bandit import UCB1MutationBandit
-from tasks.benchmark_tasks import BENCHMARK_TASKS, BenchmarkTask, get_random_task, get_benchmark_task
+from benchmarks.benchmarks_tasks import BENCHMARK_TASKS, BenchmarkTask, get_random_task, get_benchmark_task
 
 logger = logging.getLogger(__name__)
 

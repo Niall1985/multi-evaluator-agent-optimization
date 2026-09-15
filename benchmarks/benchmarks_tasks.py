@@ -203,7 +203,7 @@ def get_benchmark_task(task_id: str) -> Optional[BenchmarkTask]:
     for t in BENCHMARK_TASKS:
         if t.id == task_id or t.name == task_id:
             return t
-    # Fall back to external suites (benchmarks/). Imported lazily to avoid a circular import.
+    # Fall back to the ARC suite. Imported lazily: arc_challenge imports BenchmarkTask from this module.
     from benchmarks.arc_challenge import get_arc_task
     return get_arc_task(task_id)
 

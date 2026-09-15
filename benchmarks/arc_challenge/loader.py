@@ -24,7 +24,7 @@ import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
-from tasks.benchmark_tasks import BenchmarkTask
+from benchmarks.benchmarks_tasks import BenchmarkTask
 
 Grid = List[List[int]]
 

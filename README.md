@@ -96,9 +96,10 @@ multi-evaluator-agent-optimization/
 │   ├── bayesian_weights.py    # Gaussian Process + Expected Improvement for weights w
 │   ├── joint_sampler.py       # Samples joint search space V = (pi, x_E, w, theta_H)
 │   └── scoring.py             # Cost-penalized scalarization: sum(w*mu) - lambda*sum(c)
-├── tasks/
+├── benchmarks/
 │   ├── __init__.py
-│   └── benchmark_tasks.py     # Python algorithmic & reasoning benchmark suite
+│   ├── benchmarks_tasks.py    # 7 canonical HumanEval / MBPP / algorithmic tasks + BenchmarkTask dataclass
+│   └── arc_challenge/         # ARC-AGI grid tasks: split-file data, real + partial evaluators, viz
 ├── controller.py              # Evolutionary optimization loop orchestrator
 ├── app.py                     # Interactive Streamlit Web Application
 ├── requirements.txt           # Python dependencies

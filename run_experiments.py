@@ -7,7 +7,7 @@ import pandas as pd
 from typing import List, Optional
 
 from controller import EvolutionController
-from tasks.benchmark_tasks import BENCHMARK_TASKS
+from benchmarks.benchmarks_tasks import BENCHMARK_TASKS
 
 logging.basicConfig(
     level=logging.INFO,
