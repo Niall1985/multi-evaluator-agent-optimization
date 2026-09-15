@@ -98,7 +98,7 @@ multi-evaluator-agent-optimization/
 │   └── scoring.py             # Cost-penalized scalarization: sum(w*mu) - lambda*sum(c)
 ├── benchmarks/
 │   ├── __init__.py
-│   ├── benchmarks_tasks.py    # 7 canonical HumanEval / MBPP / algorithmic tasks + BenchmarkTask dataclass
+│   ├── benchmark_tasks.py    # 7 canonical HumanEval / MBPP / algorithmic tasks + BenchmarkTask dataclass
 │   └── arc_challenge/         # ARC-AGI grid tasks: split-file data, real + partial evaluators, viz
 ├── controller.py              # Evolutionary optimization loop orchestrator
 ├── app.py                     # Interactive Streamlit Web Application

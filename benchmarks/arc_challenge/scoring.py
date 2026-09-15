@@ -12,7 +12,7 @@ the evaluators in `evaluators.py` (official metrics) and `partial_evaluators.py`
 from typing import Any, Dict, List, Optional, Sequence
 
 from evaluation.runner import CodeExecutionRunner
-from benchmarks.benchmarks_tasks import BenchmarkTask
+from benchmarks.benchmark_tasks import BenchmarkTask
 
 Grid = List[List[int]]
 

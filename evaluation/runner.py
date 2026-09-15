@@ -3,7 +3,7 @@ import re
 import math
 from dataclasses import dataclass, field
 from typing import Dict, List, Any, Optional, Tuple, Callable
-from benchmarks.benchmarks_tasks import BenchmarkTask
+from benchmarks.benchmark_tasks import BenchmarkTask
 
 
 @dataclass

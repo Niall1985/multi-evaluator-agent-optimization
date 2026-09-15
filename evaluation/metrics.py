@@ -8,7 +8,7 @@ from .base import BaseEvaluator, EvaluatorResult
 
 
 from .runner import CodeExecutionRunner
-from benchmarks.benchmarks_tasks import BenchmarkTask
+from benchmarks.benchmark_tasks import BenchmarkTask
 
 
 class FunctionalCorrectnessEvaluator(BaseEvaluator):

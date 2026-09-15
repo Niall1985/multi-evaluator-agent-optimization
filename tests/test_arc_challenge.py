@@ -33,7 +33,7 @@ from benchmarks.arc_challenge import (
 from controller import EvolutionController
 from core.groq_client import GroqLLMClient
 from evaluation.runner import CodeExecutionRunner
-from benchmarks.benchmarks_tasks import BENCHMARK_TASKS, get_benchmark_task
+from benchmarks.benchmark_tasks import BENCHMARK_TASKS, get_benchmark_task
 
 
 class TestArcChallengeBenchmark(unittest.TestCase):

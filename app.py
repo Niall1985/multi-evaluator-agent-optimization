@@ -8,7 +8,7 @@ from plotly.subplots import make_subplots
 
 from controller import EvolutionController
 from core.agent import AGENT_ARCHETYPES
-from benchmarks.benchmarks_tasks import BENCHMARK_TASKS
+from benchmarks.benchmark_tasks import BENCHMARK_TASKS
 from benchmarks.arc_challenge import (
     ARC_TASKS,
     benchmark_summary_frame,

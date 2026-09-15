@@ -15,7 +15,7 @@ import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-from benchmarks.benchmarks_tasks import BenchmarkTask
+from benchmarks.benchmark_tasks import BenchmarkTask
 
 from .scoring import grids_equal, pixel_accuracy, score_arc_cases, to_grid
 

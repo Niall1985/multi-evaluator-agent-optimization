@@ -22,7 +22,7 @@ from evaluation.metrics import (
 from optimization.bayesian_weights import BayesianWeightOptimizer
 from optimization.scoring import calculate_cost_penalized_fitness, calculate_relative_improvement
 from optimization.joint_sampler import JointSearchSampler
-from benchmarks.benchmarks_tasks import BENCHMARK_TASKS, get_benchmark_task
+from benchmarks.benchmark_tasks import BENCHMARK_TASKS, get_benchmark_task
 from controller import EvolutionController
 
 
