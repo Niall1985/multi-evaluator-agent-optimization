@@ -1,5 +1,6 @@
 import time
 import logging
+import numpy as np
 from typing import Dict, List, Any, Optional
 from core.agent import Agent, HarnessKnobs, AGENT_ARCHETYPES
 from core.archive import PopulationArchive
@@ -10,13 +11,14 @@ from optimization.bayesian_weights import BayesianWeightOptimizer
 from optimization.scoring import calculate_cost_penalized_fitness, calculate_relative_improvement
 from optimization.joint_sampler import JointSearchSampler
 from optimization.bandit import UCB1MutationBandit
+from optimization.fanova import FunctionalANOVA
 from tasks.benchmark_tasks import BENCHMARK_TASKS, BenchmarkTask, get_random_task, get_benchmark_task
 
 logger = logging.getLogger(__name__)
 
 
 class EvolutionController:
-    """Evolutionary optimization loop orchestrator implementing Gaps 1, 2, and 3."""
+    """Evolutionary optimization loop orchestrator implementing Gaps 1, 2, 3, 4, 5, and 6."""
 
     def __init__(
         self,
@@ -28,6 +30,7 @@ class EvolutionController:
         selected_task_id: Optional[str] = None,
         inter_call_delay: float = 1.5,
         is_mock: Optional[bool] = None,
+        acquisition_type: str = "gp_ucb",
     ):
         self.api_key = api_key
         self.model = model
@@ -37,6 +40,7 @@ class EvolutionController:
         self.selected_task_id = selected_task_id
         self.inter_call_delay = inter_call_delay
         self.is_mock = is_mock
+        self.acquisition_type = acquisition_type
         self.csv_filepath = "optimization_results.csv"
 
         # Core components
@@ -48,12 +52,17 @@ class EvolutionController:
         )
         self.evaluator_pool = EvaluatorPool(llm_client=self.llm_client)
         self.metric_names = self.evaluator_pool.get_evaluator_names()
-        self.bayesian_optimizer = BayesianWeightOptimizer(metric_names=self.metric_names)
+        self.bayesian_optimizer = BayesianWeightOptimizer(
+            metric_names=self.metric_names,
+            acquisition_type=acquisition_type,
+        )
+        self.fanova = FunctionalANOVA(evaluator_names=self.metric_names)
         self.mutator = PromptMutator(llm_client=self.llm_client)
         self.bandit = UCB1MutationBandit(arms=self.mutator.get_available_strategies())
         self.sampler = JointSearchSampler(
             evaluator_pool=self.evaluator_pool,
             bayesian_optimizer=self.bayesian_optimizer,
+            fanova=self.fanova,
         )
         self.archive = PopulationArchive()
 
@@ -67,17 +76,22 @@ class EvolutionController:
         self.initialize_seed(archetype_name=self.initial_archetype, task_id=self.selected_task_id)
 
     def reset(self, initial_archetype: Optional[str] = None, selected_task_id: Optional[str] = None):
-        """Resets the controller state, archive, and optimizer."""
+        """Resets the controller state, archive, and optimizers."""
         if initial_archetype:
             self.initial_archetype = initial_archetype
         if selected_task_id is not None:
             self.selected_task_id = selected_task_id
         self.archive = PopulationArchive()
-        self.bayesian_optimizer = BayesianWeightOptimizer(metric_names=self.metric_names)
+        self.bayesian_optimizer = BayesianWeightOptimizer(
+            metric_names=self.metric_names,
+            acquisition_type=self.acquisition_type,
+        )
+        self.fanova = FunctionalANOVA(evaluator_names=self.metric_names)
         self.bandit = UCB1MutationBandit(arms=self.mutator.get_available_strategies())
         self.sampler = JointSearchSampler(
             evaluator_pool=self.evaluator_pool,
             bayesian_optimizer=self.bayesian_optimizer,
+            fanova=self.fanova,
         )
         self.current_generation = 0
         self.cumulative_adaptive_cost = 0.0
@@ -165,6 +179,37 @@ class EvolutionController:
         )
         self.archive.export_to_csv(self.csv_filepath)
 
+        # Extract test case execution details for UI test suite viewer
+        test_cases_results = []
+        eval_res_1 = details.get("mu_1_correctness")
+        if eval_res_1 and hasattr(eval_res_1, "details") and isinstance(eval_res_1.details, dict):
+            test_cases_results.extend(eval_res_1.details.get("case_results", []))
+        if not test_cases_results:
+            from evaluation.runner import CodeExecutionRunner
+            rep = CodeExecutionRunner.run_task(task=benchmark, agent_output=agent_solution, include_test_cases=True, include_edge_cases=True)
+            test_cases_results = [
+                {
+                    "index": c.case_index,
+                    "type": c.case_type,
+                    "args": str(c.args),
+                    "expected": str(c.expected),
+                    "actual": str(c.actual),
+                    "passed": c.passed,
+                    "error": c.error or c.exception_raised,
+                }
+                for c in rep.case_results
+            ]
+
+        test_suite_data = {
+            "task_id": benchmark.id,
+            "task_name": benchmark.name,
+            "task_description": benchmark.description,
+            "entry_point": benchmark.entry_point,
+            "cases": test_cases_results,
+            "total_count": len(test_cases_results),
+            "passed_count": sum(1 for c in test_cases_results if c.get("passed")),
+        }
+
         seed_record = {
             "generation": 0,
             "child_id": seed_agent.id,
@@ -183,6 +228,8 @@ class EvolutionController:
             "task_id": benchmark.id,
             "mutation_type": seed_agent.mutation_type,
             "mutation_goal": seed_agent.mutation_description,
+            "silent_regression": {"has_regression": False},
+            "test_suite": test_suite_data,
         }
         self.history_records.append(seed_record)
 
@@ -209,14 +256,17 @@ class EvolutionController:
         # 1. Sample Parent
         parent = self.sampler.sample_parent(self.archive)
 
-        # 2. Mutate Agent (prompt + theta_H knobs)
+        # 2. Mutate Agent (prompt + continuous theta_H knobs)
         if active_strategy == "ucb1_bandit":
             selected_arm = self.bandit.select_arm()
             child, mut_type, mut_goal = self.mutator.mutate(parent, generation=gen, strategy_tuple=selected_arm)
         else:
             child, mut_type, mut_goal = self.mutator.mutate(parent, generation=gen)
 
-        # 3. Propose Weights
+        # Gap 6: Sample continuous harness knobs (temperature, top_p)
+        child.harness_knobs = self.sampler.sample_harness_knobs(child.harness_knobs)
+
+        # 3. Propose Weights (Gap 2 & Gap 6: GP-UCB with sublinear regret)
         if active_strategy == "single_metric":
             weights = {name: (1.0 if name == "mu_1_correctness" else 0.0) for name in self.metric_names}
         elif active_strategy in ["static_cascade", "ucb1_bandit"]:
@@ -233,13 +283,13 @@ class EvolutionController:
         agent_solution = self._execute_agent_on_task(child, task)
         exec_time_ms = (time.time() - exec_start) * 1000
 
-        # 6. Active Evaluators determination
+        # 6. Active Evaluators determination (Gap 1, 4, 5: 2-Tier Cascade + fANOVA + Epsilon-Probing)
+        subset_metadata: Dict[str, Any] = {}
         if active_strategy == "single_metric":
             active_evaluators = ["mu_1_correctness"]
         elif active_strategy in ["ucb1_bandit", "no_pruning"]:
             active_evaluators = list(self.metric_names)
         else:  # static_cascade, full_adaptive
-            # Multi-tier selective search: run Core first
             core_evals = self.evaluator_pool.get_evaluators_by_tier("core")
             core_scores, core_costs, _ = self.evaluator_pool.evaluate_subset(
                 agent=child,
@@ -248,11 +298,11 @@ class EvolutionController:
                 active_subset=core_evals,
                 execution_context={"generation_latency_ms": exec_time_ms},
             )
-            # Preview score across core metrics
             core_preview = sum(core_scores.values()) / max(1, len(core_scores))
-            active_evaluators = self.sampler.determine_active_evaluator_subset(
+            active_evaluators, subset_metadata = self.sampler.determine_active_evaluator_subset(
                 strategy="adaptive",
                 core_score_preview=core_preview,
+                generation=gen,
             )
 
         # 7. Run evaluation on active evaluators
@@ -264,7 +314,7 @@ class EvolutionController:
             execution_context={"generation_latency_ms": exec_time_ms},
         )
 
-        # 8. Cost-Penalized Fitness Score
+        # 8. Cost-Penalized Fitness Score (Gap 3)
         fitness, spent_cost = calculate_cost_penalized_fitness(
             evaluator_scores=scores,
             weights=weights,
@@ -272,7 +322,7 @@ class EvolutionController:
             lambda_penalty=self.lambda_penalty,
         )
 
-        # 9. Compute Delta_F and update Bayesian GP / Bandit models
+        # 9. Compute Delta_F and update Bayesian GP / Bandit / fANOVA models
         delta_f = calculate_relative_improvement(
             child_fitness=fitness,
             parent_fitness=parent.fitness,
@@ -282,17 +332,23 @@ class EvolutionController:
         elif active_strategy == "ucb1_bandit":
             self.bandit.update(arm_name=mut_type, reward=delta_f)
 
-        # 10. Update telemetry and archive
-        full_naive_cost = self.evaluator_pool.get_full_eval_cost()
-        self.cumulative_adaptive_cost += spent_cost
-        self.cumulative_naive_cost += full_naive_cost
-
+        # Update fANOVA surrogate model with observed metrics
         child.metrics = scores
         child.fitness = fitness
         child.cost_spent = spent_cost
         child.active_evaluators = active_evaluators
         child.last_solution = agent_solution
         child.task_id = task.id
+
+        self._update_fanova()
+
+        # Gap 5: Check for silent regression against dimension elites
+        regression_info = self.archive.detect_silent_regression(child)
+
+        # 10. Update telemetry and archive
+        full_naive_cost = self.evaluator_pool.get_full_eval_cost()
+        self.cumulative_adaptive_cost += spent_cost
+        self.cumulative_naive_cost += full_naive_cost
 
         gen_metadata = {
             "strategy": active_strategy,
@@ -304,9 +360,42 @@ class EvolutionController:
             "cumulative_naive_cost": round(self.cumulative_naive_cost, 6),
             "task_id": task.id,
             "solution_preview": agent_solution[:100] + "..." if len(agent_solution) > 100 else agent_solution,
+            "soft_probe": subset_metadata.get("soft_probe_triggered", False),
+            "fanova_pruned_count": len(subset_metadata.get("fanova_pruned", [])),
         }
         self.archive.add_agent(child, generation_metadata=gen_metadata)
         self.archive.export_to_csv(self.csv_filepath)
+
+        # Extract test case execution details for UI test suite viewer
+        test_cases_results = []
+        eval_res_gen = details.get("mu_1_correctness")
+        if eval_res_gen and hasattr(eval_res_gen, "details") and isinstance(eval_res_gen.details, dict):
+            test_cases_results.extend(eval_res_gen.details.get("case_results", []))
+        if not test_cases_results:
+            from evaluation.runner import CodeExecutionRunner
+            rep = CodeExecutionRunner.run_task(task=task, agent_output=agent_solution, include_test_cases=True, include_edge_cases=True)
+            test_cases_results = [
+                {
+                    "index": c.case_index,
+                    "type": c.case_type,
+                    "args": str(c.args),
+                    "expected": str(c.expected),
+                    "actual": str(c.actual),
+                    "passed": c.passed,
+                    "error": c.error or c.exception_raised,
+                }
+                for c in rep.case_results
+            ]
+
+        test_suite_data = {
+            "task_id": task.id,
+            "task_name": task.name,
+            "task_description": task.description,
+            "entry_point": task.entry_point,
+            "cases": test_cases_results,
+            "total_count": len(test_cases_results),
+            "passed_count": sum(1 for c in test_cases_results if c.get("passed")),
+        }
 
         record = {
             "generation": gen,
@@ -326,9 +415,32 @@ class EvolutionController:
             "task_id": task.id,
             "mutation_type": child.mutation_type,
             "mutation_goal": mut_goal,
+            "silent_regression": regression_info,
+            "fanova_pruned": subset_metadata.get("fanova_pruned", []),
+            "soft_probe_triggered": subset_metadata.get("soft_probe_triggered", False),
+            "test_suite": test_suite_data,
         }
         self.history_records.append(record)
         return record
+
+    def _update_fanova(self):
+        """Updates Functional ANOVA variance decomposition using historical agent evaluations."""
+        agents = self.archive.get_all_agents()
+        if len(agents) < 4:
+            return
+
+        X_rows = []
+        y_vals = []
+        for a in agents:
+            if a.metrics and len(a.metrics) >= 3:
+                row = [a.metrics.get(m, 0.0) for m in self.metric_names]
+                X_rows.append(row)
+                y_vals.append(a.fitness)
+
+        if len(X_rows) >= 4:
+            X_mat = np.array(X_rows)
+            y_arr = np.array(y_vals)
+            self.fanova.fit(X_mat, y_arr)
 
     def run_n_generations(self, n: int, strategy: Optional[str] = None) -> List[Dict[str, Any]]:
         """Runs N consecutive generation cycles."""
@@ -363,8 +475,16 @@ class EvolutionController:
             "constraints": task.constraints,
         }
 
+    def get_fanova_summary(self) -> Dict[str, Any]:
+        """Returns current fANOVA sensitivity analysis."""
+        return self.fanova.get_fanova_summary()
+
+    def get_dimension_elites_summary(self) -> Dict[str, Any]:
+        """Returns per-evaluator archive view for Gap 5."""
+        return self.archive.get_dimension_elites()
+
     def get_telemetry_summary(self) -> Dict[str, Any]:
-        """Returns overall KPI metrics for Streamlit cards."""
+        """Returns overall KPI metrics for UI cards."""
         best_agent = self.archive.get_best_agent()
         total_saved = max(0.0, self.cumulative_naive_cost - self.cumulative_adaptive_cost)
         pct_saved = (
@@ -372,6 +492,8 @@ class EvolutionController:
             if self.cumulative_naive_cost > 0
             else 0.0
         )
+        fanova_info = self.get_fanova_summary()
+
         return {
             "total_generations": self.current_generation,
             "best_fitness": best_agent.fitness if best_agent else 0.0,
@@ -382,4 +504,6 @@ class EvolutionController:
             "cost_saved_pct": pct_saved,
             "archive_size": len(self.archive.agents),
             "pareto_size": len(self.archive.get_pareto_front()),
+            "redundant_evaluators_count": len(fanova_info.get("redundant_evaluators", [])),
+            "fanova_total_variance": fanova_info.get("total_variance", 0.0),
         }

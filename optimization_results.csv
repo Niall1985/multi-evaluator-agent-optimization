@@ -1,44 +1,25 @@
-generation,agent_id,parent_id,fitness,cost_spent,mutation_type,temperature,max_retries,active_evaluators_count,mu_1_correctness,mu_2_latency,mu_3_conciseness,mu_4_reasoning,mu_5_edge_cases,mu_6_safety,strategy,naive_cost_spent,cumulative_adaptive_cost,cumulative_naive_cost,task_id,system_prompt,top_p,max_tokens,delta_f,cost_saved_this_gen,solution_preview,weight_mu_1_correctness,weight_mu_2_latency,weight_mu_3_conciseness,weight_mu_4_reasoning,weight_mu_5_edge_cases,weight_mu_6_safety
-0,agent_seed_general_g0,,0.7309333333333333,0.036,seed_general,0.7,2,6,1.0,0.0906,0.533,0.97,1.0,0.9,seed,0.036,0.036,0.036,mbpp_006_differ_bits,"You are an expert, precise, and robust AI coding assistant. Solve the given problem clearly, accurately, and efficiently with minimal fluff.",0.95,1024,0.0,0.0,"**Solution Explanation**
-
-For two non‑negative integers `a` and `b` we have to decide whether their ...",0.167,0.167,0.167,0.167,0.167,0.167
-1,agent_g1_fa6680,agent_seed_general_g0,0.39269873571561903,0.001,robust_retry,0.738080886626053,3,3,1.0,0.0813,0.449,,,,full_adaptive,0.036,0.037,0.072,he_055_fib,"Act as a rigorous AI coding assistant.  
-- Validate all inputs explicitly, checking types, ranges, and required conditions.  
-- Surround every functional block with defensive try‑except structures that catch and handle all foreseeable errors, providing clear error messages.  
-- Produce clear, correct, and efficient code with minimal fluff.  
-- Document assumptions, edge cases, and error‑handling decisions within comments.  
-- Ensure robustness, precision, and reliability in every solution.",0.9222060974293973,1024,-0.3382,0.035,"**Solution Overview**
-
-The function `solve` returns the *n‑th* Fibonacci number (0‑indexed) using a ...",0.294,0.289,0.168,0.083,0.108,0.058
-2,agent_g2_863b7d,agent_seed_general_g0,0.7478613747043467,0.036,conciseness_economy,0.6513110327374617,2,6,1.0,0.2023,1.0,0.9,1.0,0.9,full_adaptive,0.036,0.073,0.108,he_055_fib,"You are a precise, robust AI coding assistant.  
-- Solve the problem accurately and efficiently.  
-- Provide only the essential solution; omit greetings, pleasantries, and unnecessary explanations.  
-- Use minimal formatting—no extra markdown unless required for code blocks.  
-- Deliver clear, correct code or answer directly.",0.9590421980742612,1024,0.0169,0.0,"```python
+generation,agent_id,parent_id,fitness,cost_spent,mutation_type,temperature,max_retries,active_evaluators_count,mu_1_correctness,mu_2_latency,mu_3_conciseness,mu_4_reasoning,mu_5_edge_cases,mu_6_safety,strategy,naive_cost_spent,cumulative_adaptive_cost,cumulative_naive_cost,task_id,system_prompt,top_p,max_tokens,delta_f,cost_saved_this_gen,solution_preview,weight_mu_1_correctness,weight_mu_2_latency,weight_mu_3_conciseness,weight_mu_4_reasoning,weight_mu_5_edge_cases,weight_mu_6_safety,soft_probe,fanova_pruned_count
+0,agent_seed_general_g0,,0.6219999999999999,0.036,seed_general,0.7,2,6,0.0,1.0,1.0,0.92,0.0,0.92,seed,0.036,0.036,0.036,he_000_has_close_elements,"You are an expert, precise, and robust AI coding assistant. Solve the given problem clearly, accurately, and efficiently with minimal fluff.",0.95,1024,0.0,0.0,"```python
+def solve(a: int, b: int) -> bool:
+    val = a ^ b
+    return val > 0 and (val & (val - 1)...",0.167,0.167,0.167,0.167,0.167,0.167,,
+1,agent_g1_e2d590,agent_seed_general_g0,0.9197832609633169,0.036,conciseness_economy,0.803,2,6,1.0,1.0,1.0,0.92,1.0,0.92,full_adaptive,0.036,0.072,0.072,he_055_fib,"You are a hyper-concise AI code synthesizer. Deliver pure, production-grade Python implementations. Omit all conversational filler, greetings, comments, and postamble text. Return only optimal code.",0.907,1024,0.2978,0.0,"```python
 def solve(n: int) -> int:
     if n < 0:
-        raise ValueError(""n must be non‑negative"")...",0.066,0.244,0.035,0.129,0.258,0.27
-3,agent_g3_ab9dcc,agent_seed_general_g0,0.3952586219237968,0.001,safety_adherence,0.7384577683280885,1,3,1.0,0.0826,0.434,,,,full_adaptive,0.036,0.074,0.144,he_055_fib,"Expert AI coding assistant. Strictly enforce declared parameter types, value ranges, and security policies. Validate all inputs, reject or sanitize unsafe data, and never exceed access permissions. Produce precise, correct, and efficient code with minimal fluff. Explain solutions concisely and ensure full compliance with all constraints.",0.9621303479098792,1024,-0.3357,0.035,"**Solution Explanation**
-
-The Fibonacci sequence is defined as  
-
-* `F(0) = 0`  
-* `F(1) = 1`  
-* `F...",0.336,0.508,0.04,0.037,0.008,0.07
-4,agent_g4_30b7f6,agent_g2_863b7d,0.8105691106194485,0.036,conciseness_economy,0.674620886309863,2,6,1.0,0.2111,1.0,0.95,1.0,0.9,full_adaptive,0.036,0.11,0.18,he_055_fib,"You are a precise, robust AI coding assistant. Follow these rules:
-1. Solve the problem accurately and efficiently.
-2. Respond with only the essential solution; omit greetings, pleasantries, and explanations.
-3. Use no markdown formatting except when a code block is required.
-4. Deliver clear, correct code or answer directly.",0.9509354598141644,1024,0.0627,0.0,"```python
+        raise ValueError('n must be non-negative')...",0.029,0.093,0.051,0.428,0.049,0.349,False,0.0
+2,agent_g2_25a94f,agent_g1_e2d590,0.9595585256416758,0.036,edge_case_awareness,0.922,1,6,1.0,1.0,1.0,0.92,1.0,0.92,full_adaptive,0.036,0.108,0.108,he_055_fib,"You are a defensive AI software engineer. Before implementing, rigorously inspect and trap all corner cases (empty collections, zero values, negative indices, and boundary overflows). Ensure every edge case is handled cleanly with explicit validations.",0.854,1024,0.0398,0.0,"```python
 def solve(n: int) -> int:
     if n < 0:
-        raise ValueError(""n must be non‑negative"")...",0.099,0.161,0.146,0.202,0.048,0.344
-5,agent_g5_e4aa6c,agent_g2_863b7d,0.8804884119857714,0.036,conciseness_economy,0.5503799034869586,3,6,1.0,0.2227,1.0,0.96,1.0,0.9,full_adaptive,0.036,0.146,0.216,he_055_fib,"You are a precise, robust AI coding assistant.  
-Follow these rules:  
-1. Solve the problem accurately and efficiently.  
-2. Provide only the essential solution—no greetings, pleasantries, or explanations.  
-3. Use minimal formatting: plain text unless a code block is required.  
-4. Return clear, correct code or answer directly.",0.9281163969375646,1024,0.1326,0.0,"```python
+        raise ValueError('n must be non-negative')...",0.258,0.109,0.143,0.053,0.21,0.227,False,0.0
+3,agent_g3_5f05b6,agent_g1_e2d590,0.9499822377245539,0.036,safety_adherence,0.676,1,6,1.0,1.0,1.0,0.92,1.0,0.92,full_adaptive,0.036,0.144,0.144,he_055_fib,"You are a security and constraint-focused AI assistant. Strictly enforce input types, bounds, and safety requirements. Prevent any hallucination of external dependencies and maintain deterministic behavior.",0.87,1024,0.0302,0.0,"```python
 def solve(n: int) -> int:
     if n < 0:
-        raise ValueError(""n must be non‑negative"")...",0.183,0.058,0.097,0.083,0.046,0.534
+        raise ValueError('n must be non-negative')...",0.009,0.273,0.29,0.028,0.027,0.372,False,0.0
+4,agent_g4_caaed5,agent_g3_5f05b6,0.9189773897207505,0.036,chain_of_thought,0.54,2,6,1.0,1.0,1.0,0.92,1.0,0.92,full_adaptive,0.036,0.18,0.18,he_055_fib,"You are an analytical AI reasoning specialist. Solve problems by decomposing them into clear logical steps: 1) Analyze mathematical invariants and boundary conditions, 2) Design optimal data structures, 3) Synthesize verified, robust Python code.",0.8,1024,-0.031,0.0,"```python
+def solve(n: int) -> int:
+    if n < 0:
+        raise ValueError('n must be non-negative')...",0.024,0.041,0.115,0.711,0.033,0.076,False,0.0
+5,agent_g5_73f848,agent_g2_25a94f,0.28981778843104766,0.015,algorithmic_efficiency,0.931,2,3,,1.0,1.0,0.92,,,full_adaptive,0.036,0.195,0.216,he_055_fib,"You are an algorithmic optimization specialist. Prioritize optimal asymptotic complexity: target O(N) or O(log N) runtime and O(1) auxiliary memory. Use optimal two-pointer, hashing, or dynamic programming techniques.",0.8,1024,-0.6697,0.021,"```python
+def solve(n: int) -> int:
+    if n < 0:
+        raise ValueError('n must be non-negative')...",0.136,0.013,0.025,0.281,0.401,0.143,True,3.0
