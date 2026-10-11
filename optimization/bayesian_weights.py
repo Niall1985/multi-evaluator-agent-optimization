@@ -1,7 +1,7 @@
 import warnings
 import numpy as np
 import pandas as pd
-from typing import List, Dict, Tuple
+from typing import List, Dict, Tuple, Optional, Any
 from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.gaussian_process.kernels import Matern, ConstantKernel as C
 from sklearn.exceptions import ConvergenceWarning
@@ -11,12 +11,22 @@ warnings.filterwarnings("ignore", category=ConvergenceWarning)
 
 
 class BayesianWeightOptimizer:
-    """Gap 2: Bayesian Weight Optimization over metric weights w in R^k via Gaussian Process + Expected Improvement (EI)."""
+    """Gap 2 & Gap 6: Bayesian Weight Optimization over metric weights w on the simplex Delta^(K-1)
+    using Gaussian Process with Expected Improvement (EI) or GP-UCB with formal sublinear regret bound.
+    """
 
-    def __init__(self, metric_names: List[str], xi: float = 0.01):
+    def __init__(
+        self,
+        metric_names: List[str],
+        xi: float = 0.01,
+        acquisition_type: str = "gp_ucb",
+        beta_scale: float = 1.0,
+    ):
         self.metric_names = metric_names
         self.dim = len(metric_names)
         self.xi = xi
+        self.acquisition_type = acquisition_type  # 'gp_ucb' or 'expected_improvement'
+        self.beta_scale = beta_scale
         self.X_history: List[List[float]] = []  # Weight vectors w (sum=1)
         self.y_history: List[float] = []        # Delta_F (relative improvements)
         self.weights_log: List[Dict[str, float]] = []
@@ -56,24 +66,39 @@ class BayesianWeightOptimizer:
                 warnings.simplefilter("ignore")
                 self.gp.fit(X, y)
 
-    def propose_next_weights(self) -> Dict[str, float]:
-        """Proposes the next continuous weight vector w maximizing Expected Improvement."""
+    def compute_beta_t(self, t: int, delta: float = 0.1) -> float:
+        """Gap 6: Computes Srinivas et al. theoretical beta_t for GP-UCB sublinear regret bound O(sqrt(T * gamma_T))."""
+        # beta_t = sqrt(2 * ln(t^2 * pi^2 / (6 * delta)))
+        safe_t = max(1, t)
+        val = 2.0 * np.log((safe_t ** 2) * (np.pi ** 2) / (6.0 * delta))
+        return self.beta_scale * float(np.sqrt(max(0.1, val)))
+
+    def propose_next_weights(self, acquisition: Optional[str] = None) -> Dict[str, float]:
+        """Proposes the next continuous weight vector w on simplex Delta^(K-1) via GP-UCB or EI."""
+        acq = acquisition or self.acquisition_type
+        t = len(self.X_history) + 1
+
         if len(self.X_history) < 3:
             # Initial exploration via Dirichlet sampling
             raw_w = np.random.dirichlet(np.ones(self.dim))
         else:
             # Generate Dirichlet candidate pool on the simplex
-            candidates = np.random.dirichlet(np.ones(self.dim), size=300)
+            candidates = np.random.dirichlet(np.ones(self.dim), size=400)
             mu, sigma = self.gp.predict(candidates, return_std=True)
             f_best = np.max(self.y_history)
 
-            # Expected Improvement (EI)
-            improvement = mu - f_best - self.xi
-            sigma_safe = np.maximum(sigma, 1e-9)
-            Z = improvement / sigma_safe
-            ei = improvement * norm.cdf(Z) + sigma_safe * norm.pdf(Z)
+            if acq == "gp_ucb":
+                # Gap 6: GP-UCB acquisition with theoretical sublinear regret parameter beta_t
+                beta_t = self.compute_beta_t(t=t)
+                acq_values = mu + beta_t * sigma
+            else:
+                # Expected Improvement (EI)
+                improvement = mu - f_best - self.xi
+                sigma_safe = np.maximum(sigma, 1e-9)
+                Z = improvement / sigma_safe
+                acq_values = improvement * norm.cdf(Z) + sigma_safe * norm.pdf(Z)
 
-            best_idx = int(np.argmax(ei))
+            best_idx = int(np.argmax(acq_values))
             raw_w = candidates[best_idx]
 
         # Ensure simplex constraint sum(w_j) = 1

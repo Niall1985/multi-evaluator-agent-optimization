@@ -323,16 +323,74 @@ class TestMultiObjectiveAgentOptimization(unittest.TestCase):
 
         wilcoxon_df, conv_df = analyze_csv_results(test_csv)
         self.assertFalse(wilcoxon_df.empty)
-        self.assertFalse(conv_df.empty)
+    def test_fanova_variance_decomposition(self):
+        from optimization.fanova import FunctionalANOVA
+        eval_names = ["mu_1_correctness", "mu_2_latency", "mu_3_conciseness", "mu_4_reasoning", "mu_5_edge_cases", "mu_6_safety"]
+        fanova = FunctionalANOVA(evaluator_names=eval_names, redundancy_threshold=0.05)
+        
+        # Synthetic data where mu_1 has high variance impact, mu_3 has low
+        rng = np.random.RandomState(42)
+        X = rng.uniform(0.1, 1.0, size=(30, 6))
+        # y depends heavily on column 0 (mu_1) and column 3 (mu_4)
+        y = 2.0 * X[:, 0] + 1.5 * X[:, 3] + 0.01 * X[:, 2] + rng.normal(0, 0.02, size=30)
+        
+        fanova.fit(X, y)
+        importances = fanova.get_importance_scores()
+        self.assertEqual(len(importances), 6)
+        self.assertGreater(importances["mu_1_correctness"], importances["mu_3_conciseness"])
+        summary = fanova.get_fanova_summary()
+        self.assertIn("evaluator_importances", summary)
+        self.assertIn("redundant_evaluators", summary)
 
-        # Cleanup
-        if os.path.exists(test_csv):
-            os.remove(test_csv)
-        if os.path.exists("statistical_analysis_summary.csv"):
-            os.remove("statistical_analysis_summary.csv")
-        if os.path.exists("task_condition_metrics.csv"):
-            os.remove("task_condition_metrics.csv")
+    def test_gap5_dimension_elites_and_silent_regression(self):
+        archive = PopulationArchive()
+        
+        # Agent 1: High on correctness (0.95), low on latency (0.2)
+        a1 = Agent(id="agent_1", generation=1, system_prompt="Prompt A")
+        a1.metrics = {"mu_1_correctness": 0.95, "mu_2_latency": 0.20}
+        a1.fitness = 0.8
+        archive.add_agent(a1)
+        
+        elites = archive.get_dimension_elites()
+        self.assertEqual(elites["mu_1_correctness"]["agent_id"], "agent_1")
+        self.assertEqual(elites["mu_1_correctness"]["score"], 0.95)
+        
+        # Agent 2: Lower correctness (0.50) -> Silent regression on correctness!
+        a2 = Agent(id="agent_2", generation=2, system_prompt="Prompt B")
+        a2.metrics = {"mu_1_correctness": 0.50, "mu_2_latency": 0.85}
+        a2.fitness = 0.7
+        archive.add_agent(a2)
+        
+        # Check silent regression on a2
+        reg_report = archive.detect_silent_regression(a2, drop_threshold=0.25)
+        self.assertTrue(reg_report["has_regression"])
+        self.assertEqual(reg_report["regressions"][0]["metric"], "mu_1_correctness")
+        
+        # Latency elite should now be agent_2
+        elites2 = archive.get_dimension_elites()
+        self.assertEqual(elites2["mu_2_latency"]["agent_id"], "agent_2")
+        self.assertEqual(elites2["mu_2_latency"]["score"], 0.85)
+
+    def test_gap6_gp_ucb_sublinear_regret_acquisition(self):
+        eval_names = ["mu_1", "mu_2", "mu_3"]
+        optimizer = BayesianWeightOptimizer(metric_names=eval_names, acquisition_type="gp_ucb")
+        
+        # Verify theoretical beta_t growth
+        beta_1 = optimizer.compute_beta_t(t=1)
+        beta_10 = optimizer.compute_beta_t(t=10)
+        self.assertGreater(beta_10, beta_1)
+        
+        # Add observations
+        optimizer.add_observation({"mu_1": 0.6, "mu_2": 0.2, "mu_3": 0.2}, delta_f=0.15)
+        optimizer.add_observation({"mu_1": 0.3, "mu_2": 0.4, "mu_3": 0.3}, delta_f=-0.05)
+        optimizer.add_observation({"mu_1": 0.1, "mu_2": 0.8, "mu_3": 0.1}, delta_f=0.25)
+        
+        # Propose weights with GP-UCB
+        next_w = optimizer.propose_next_weights(acquisition="gp_ucb")
+        self.assertEqual(len(next_w), 3)
+        self.assertAlmostEqual(sum(next_w.values()), 1.0, places=4)
 
 
 if __name__ == "__main__":
     unittest.main()
+

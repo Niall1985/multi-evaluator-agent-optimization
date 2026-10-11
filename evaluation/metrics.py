@@ -56,6 +56,18 @@ class FunctionalCorrectnessEvaluator(BaseEvaluator):
                 "total": report.total_count,
                 "syntax_error": report.syntax_error,
                 "latency_ms": round(report.latency_ms, 3),
+                "case_results": [
+                    {
+                        "index": c.case_index,
+                        "type": c.case_type,
+                        "args": str(c.args),
+                        "expected": str(c.expected),
+                        "actual": str(c.actual),
+                        "passed": c.passed,
+                        "error": c.error or c.exception_raised,
+                    }
+                    for c in report.case_results
+                ],
             },
         )
 
@@ -231,6 +243,18 @@ class EdgeCaseStressEvaluator(BaseEvaluator):
                 "total_edge_cases": report.total_count,
                 "syntax_error": report.syntax_error,
                 "latency_ms": round(report.latency_ms, 3),
+                "case_results": [
+                    {
+                        "index": c.case_index,
+                        "type": c.case_type,
+                        "args": str(c.args),
+                        "expected": str(c.expected),
+                        "actual": str(c.actual),
+                        "passed": c.passed,
+                        "error": c.error or c.exception_raised,
+                    }
+                    for c in report.case_results
+                ],
             },
         )
 

@@ -4,6 +4,7 @@ from .bayesian_weights import BayesianWeightOptimizer
 from .scoring import calculate_cost_penalized_fitness, calculate_relative_improvement
 from .joint_sampler import JointSearchSampler
 from .bandit import UCB1MutationBandit
+from .fanova import FunctionalANOVA
 
 __all__ = [
     "BayesianWeightOptimizer",
@@ -11,4 +12,5 @@ __all__ = [
     "calculate_relative_improvement",
     "JointSearchSampler",
     "UCB1MutationBandit",
+    "FunctionalANOVA",
 ]

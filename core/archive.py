@@ -4,24 +4,41 @@ from .agent import Agent
 
 
 class PopulationArchive:
-    """Maintains the population history, Pareto frontier, and lineage tracking."""
+    """Maintains the population history, Pareto frontier, lineage tracking, and Gap 5 Per-Evaluator Dimension Archive."""
 
     def __init__(self):
         self.agents: Dict[str, Agent] = {}
         self.best_agent_id: Optional[str] = None
         self.generation_records: List[Dict[str, Any]] = []
+        # Gap 5: Per-Evaluator Dimension Elite Archive
+        # Maps metric_name -> {"agent_id": str, "score": float, "generation": int, "prompt": str, "mutation": str}
+        self.dimension_elites: Dict[str, Dict[str, Any]] = {}
 
     def add_agent(self, agent: Agent, generation_metadata: Optional[Dict[str, Any]] = None):
-        """Adds an evaluated agent to the population archive."""
+        """Adds an evaluated agent to the population archive and updates per-dimension elites."""
         self.agents[agent.id] = agent
         
-        # Update best agent tracking
+        # Update overall best agent tracking
         if self.best_agent_id is None:
             self.best_agent_id = agent.id
         else:
             current_best = self.agents[self.best_agent_id]
             if agent.fitness > current_best.fitness:
                 self.best_agent_id = agent.id
+
+        # Gap 5: Update Per-Evaluator Dimension Elite Archive
+        if agent.metrics:
+            for metric_name, score in agent.metrics.items():
+                current_elite = self.dimension_elites.get(metric_name)
+                if current_elite is None or score > current_elite["score"]:
+                    self.dimension_elites[metric_name] = {
+                        "agent_id": agent.id,
+                        "score": float(score),
+                        "generation": agent.generation,
+                        "prompt": agent.system_prompt,
+                        "mutation": agent.mutation_type,
+                        "fitness": float(agent.fitness),
+                    }
 
         # Record generation summary
         record = {
@@ -48,6 +65,55 @@ class PopulationArchive:
         if self.best_agent_id and self.best_agent_id in self.agents:
             return self.agents[self.best_agent_id]
         return None
+
+    def get_dimension_elites(self) -> Dict[str, Dict[str, Any]]:
+        """Gap 5: Returns the historical peak agent information for every individual evaluator dimension."""
+        return dict(self.dimension_elites)
+
+    def get_dimension_archive_df(self) -> pd.DataFrame:
+        """Returns a formatted DataFrame of per-evaluator elites for UI display."""
+        rows = []
+        for metric, data in self.dimension_elites.items():
+            rows.append({
+                "Metric Dimension": metric,
+                "Peak Score": round(data["score"], 4),
+                "Generation Found": data["generation"],
+                "Elite Agent ID": data["agent_id"],
+                "Mutation Type": data["mutation"],
+                "Fitness": round(data["fitness"], 4),
+                "Prompt Preview": (data["prompt"][:60] + "...") if len(data["prompt"]) > 60 else data["prompt"],
+            })
+        return pd.DataFrame(rows)
+
+    def detect_silent_regression(
+        self,
+        current_agent: Agent,
+        drop_threshold: float = 0.25,
+    ) -> Dict[str, Any]:
+        """Gap 5: Checks if current_agent has silently regressed on any dimension compared to historical elites."""
+        regressions = []
+        if not current_agent.metrics or not self.dimension_elites:
+            return {"has_regression": False, "regressions": []}
+
+        for metric, elite in self.dimension_elites.items():
+            if metric in current_agent.metrics:
+                curr_score = current_agent.metrics[metric]
+                peak_score = elite["score"]
+                delta = peak_score - curr_score
+                if peak_score > 0.3 and delta > drop_threshold:
+                    regressions.append({
+                        "metric": metric,
+                        "current_score": round(curr_score, 3),
+                        "peak_score": round(peak_score, 3),
+                        "regression_magnitude": round(delta, 3),
+                        "elite_agent_id": elite["agent_id"],
+                    })
+
+        return {
+            "has_regression": len(regressions) > 0,
+            "regression_count": len(regressions),
+            "regressions": regressions,
+        }
 
     def get_all_agents(self) -> List[Agent]:
         """Returns all agents sorted by generation."""
