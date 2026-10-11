@@ -1,21 +1,24 @@
 import random
-import numpy as np
 from typing import List, Dict, Tuple, Optional, Any
+import optuna
+from optuna.distributions import CategoricalDistribution
 from core.agent import Agent, HarnessKnobs
 from core.archive import PopulationArchive
 from evaluation.pool import EvaluatorPool
 from .bayesian_weights import BayesianWeightOptimizer
 from .fanova import FunctionalANOVA
+from .tpe import categorical_tpe_choice
 
 
 class JointSearchSampler:
     """Gap 1, 4, 5, 6: Joint Discrete + Continuous Search Space Orchestrator.
-    
+
     Manages:
-    - Discrete variables: Parent candidate selection (Pareto-UCB tournament),
-      Mutation operator selection (UCB1 bandit), Evaluator subset x_E (fANOVA + 2-Tier + epsilon-probe).
-    - Continuous variables: Evaluator weights w on probability simplex Delta^(K-1) (GP-UCB with sublinear regret),
-      Harness parameters theta_H (continuous temperature, top_p).
+    - Discrete variables: parent pi and mutation idea (tree-structured Parzen estimator, spec §3.1: Optuna's
+      TPESampler for the fixed idea menu, optimization.tpe for the changing set of candidate parents),
+      evaluator subset x_E (2-tier cascade + leave-one-out soft pruning + epsilon-probe).
+    - Continuous variables: evaluator weights w on the simplex Delta^(K-1) and harness parameters theta_H
+      (temperature, top_p), proposed jointly by one GP (spec §3.2).
     """
 
     def __init__(
@@ -26,6 +29,8 @@ class JointSearchSampler:
         deep_tier_threshold: float = 0.65,
         exploration_prob: float = 0.30,
         enable_fanova_pruning: bool = True,
+        prune_patience: int = 3,
+        tpe_startup_trials: int = 5,
     ):
         self.evaluator_pool = evaluator_pool
         self.bayesian_optimizer = bayesian_optimizer
@@ -33,14 +38,43 @@ class JointSearchSampler:
         self.deep_tier_threshold = deep_tier_threshold
         self.exploration_prob = exploration_prob  # Gap 5: Soft-pruning epsilon probing probability
         self.enable_fanova_pruning = enable_fanova_pruning
+        self.prune_patience = prune_patience  # spec §3.3: W consecutive windows below tau before pruning
+        self.tpe_startup_trials = tpe_startup_trials
+        # (parent_id, idea, delta_f) per generation: the observations the parent's density-ratio estimator splits
+        self.trials: List[Tuple[str, str, float]] = []
+        # The idea menu is fixed, so it is Optuna's TPESampler over one categorical, driven by ask-and-tell:
+        # asked in sample_idea, told Delta_F in record_trial. Created on first use, when the menu is known.
+        self.idea_study: Optional[optuna.Study] = None
+        self._pending_idea_trial: Optional[optuna.trial.Trial] = None
 
-    def sample_parent(self, archive: PopulationArchive) -> Agent:
-        """Gap 6: Samples a parent agent using Pareto-preference and fitness tournament."""
+    # ------------------------------------------------------------------ discrete: parent and idea
+
+    def record_trial(self, parent_id: str, idea: str, delta_f: float) -> None:
+        self.trials.append((parent_id, idea, float(delta_f)))
+        if self._pending_idea_trial is not None:
+            self.idea_study.tell(self._pending_idea_trial, float(delta_f))
+            self._pending_idea_trial = None
+
+    def _tpe_ready(self) -> bool:
+        return len(self.trials) >= self.tpe_startup_trials
+
+    def sample_parent(self, archive: PopulationArchive, use_tpe: bool = False) -> Agent:
+        """Samples a parent. With `use_tpe` (and enough trials) the Pareto front is ranked by the density
+        ratio p(pi | G) / p(pi | B) of past parents; otherwise Pareto-preference plus fitness tournament."""
         all_agents = archive.get_all_agents()
         if not all_agents:
             return Agent()
 
         pareto_front = archive.get_pareto_front()
+        if use_tpe and pareto_front and self._tpe_ready():
+            by_id = {a.id: a for a in pareto_front}
+            chosen = categorical_tpe_choice(
+                candidates=list(by_id),
+                observed=[t[0] for t in self.trials],
+                scores=[t[2] for t in self.trials],
+            )
+            return by_id[chosen]
+
         if pareto_front and random.random() < 0.75:
             # High-fitness Pareto exploration
             return random.choice(pareto_front)
@@ -50,89 +84,92 @@ class JointSearchSampler:
         candidates = random.sample(all_agents, k)
         return max(candidates, key=lambda a: a.fitness)
 
+    def sample_idea(self, strategies: List[Tuple[str, str]], use_tpe: bool = False) -> Tuple[str, str]:
+        """Samples a mutation idea from the menu. With `use_tpe` it is Optuna's TPESampler (random for its
+        first `tpe_startup_trials` trials); the trial stays open until record_trial tells it Delta_F."""
+        if not use_tpe:
+            return random.choice(strategies)
+        by_name = dict(strategies)
+        if self.idea_study is None:
+            optuna.logging.set_verbosity(optuna.logging.WARNING)
+            self.idea_study = optuna.create_study(
+                direction="maximize",
+                sampler=optuna.samplers.TPESampler(n_startup_trials=self.tpe_startup_trials),
+            )
+        if self._pending_idea_trial is not None:
+            # The previous generation died between ask and tell: close its trial rather than leave it running
+            self.idea_study.tell(self._pending_idea_trial, state=optuna.trial.TrialState.FAIL)
+        trial = self.idea_study.ask({"idea": CategoricalDistribution(list(by_name))})
+        self._pending_idea_trial = trial
+        chosen = trial.params["idea"]
+        return chosen, by_name[chosen]
+
+    # ------------------------------------------------------------------ continuous: w and theta_H
+
     def sample_weights(self, acquisition: Optional[str] = None) -> Dict[str, float]:
         """Gap 2 & 6: Proposes continuous weights w via GP-UCB (or EI) on the simplex Delta^(K-1)."""
         return self.bayesian_optimizer.propose_next_weights(acquisition=acquisition)
 
-    def sample_harness_knobs(self, parent_knobs: HarnessKnobs) -> HarnessKnobs:
-        """Gap 6: Continuous search over agent harness knobs theta_H."""
-        # Perturb temperature with continuous Gaussian step, bounded [0.1, 1.0]
-        new_temp = float(np.clip(parent_knobs.temperature + np.random.normal(0, 0.08), 0.1, 1.0))
-        # Perturb top_p bounded [0.6, 1.0]
-        new_top_p = float(np.clip(parent_knobs.top_p + np.random.normal(0, 0.05), 0.6, 1.0))
-        # Discrete retries with small transition probability
-        new_retries = parent_knobs.max_retries
-        if random.random() < 0.20:
-            new_retries = int(np.clip(parent_knobs.max_retries + random.choice([-1, 1]), 1, 4))
-
-        return HarnessKnobs(
-            temperature=round(new_temp, 3),
-            max_retries=new_retries,
-            top_p=round(new_top_p, 3),
+    def sample_continuous(
+        self, parent_knobs: HarnessKnobs, acquisition: Optional[str] = None
+    ) -> Tuple[Dict[str, float], HarnessKnobs]:
+        """Proposes (w, theta_H) from the joint GP. Knobs the GP does not model are inherited from the parent."""
+        weights, knob_values = self.bayesian_optimizer.propose_next_config(acquisition=acquisition)
+        knobs = HarnessKnobs(
+            temperature=round(knob_values.get("temperature", parent_knobs.temperature), 3),
+            max_retries=parent_knobs.max_retries,
+            top_p=round(knob_values.get("top_p", parent_knobs.top_p), 3),
             max_tokens=parent_knobs.max_tokens,
         )
+        return weights, knobs
 
-    def determine_active_evaluator_subset(
-        self,
-        strategy: str = "adaptive",
-        core_score_preview: Optional[float] = None,
-        generation: int = 1,
-    ) -> Tuple[List[str], Dict[str, Any]]:
-        """Gap 1, 4, 5: Determines active evaluator subset x_E.
-        
-        Incorporates:
-        - 2-Tier Cascade (Core vs Deep)
-        - Gap 4: Functional ANOVA (fANOVA) redundancy detection (pruning uninformative evaluators)
-        - Gap 5: Soft-pruning with epsilon-probing (probing dropped dimensions with probability epsilon)
-        """
+    # ------------------------------------------------------------------ discrete: evaluator subset x_E
+
+    def _soft_prune(self, names: List[str], metadata: Dict[str, Any]) -> List[str]:
+        """Gap 4/5: drops evaluators fANOVA has held below tau for `prune_patience` windows, except that each
+        is still probed with probability epsilon so a wrong prune costs an occasional audit, not coverage."""
+        pruned = set(self.fanova.get_pruned_evaluators(self.prune_patience))
+        kept = []
+        for e in names:
+            if e not in pruned:
+                kept.append(e)
+            elif random.random() < self.exploration_prob:
+                kept.append(e)
+                metadata["soft_probe_triggered"] = True
+            else:
+                metadata["fanova_pruned"].append(e)
+        return kept
+
+    def select_core_subset(self, enable_pruning: bool) -> Tuple[List[str], Dict[str, Any]]:
+        """Stage 1 of the cascade: the core evaluators that run before the deep-tier decision."""
+        metadata: Dict[str, Any] = {"tier_triggered": "core", "fanova_pruned": [], "soft_probe_triggered": False}
         core_evals = self.evaluator_pool.get_evaluators_by_tier("core")
+        if enable_pruning and self.enable_fanova_pruning:
+            kept = self._soft_prune(core_evals, metadata)
+            # Never let pruning empty the preview: the deep-tier gate needs at least one core score
+            core_evals = kept or core_evals[:1]
+        return core_evals, metadata
+
+    def select_deep_subset(
+        self, core_score_preview: float, metadata: Dict[str, Any], enable_pruning: bool
+    ) -> List[str]:
+        """Stage 2: the deep evaluators to run on top of the core preview (empty when the gate stays shut)."""
         deep_evals = self.evaluator_pool.get_evaluators_by_tier("deep")
-        all_evals = core_evals + deep_evals
+        if not deep_evals:
+            return []
 
-        metadata: Dict[str, Any] = {
-            "tier_triggered": "all" if strategy == "baseline" else "core",
-            "fanova_pruned": [],
-            "soft_probe_triggered": False,
-        }
-
-        if strategy == "baseline":
-            return all_evals, metadata
-
-        # Stage 1: Core Tier execution preview
-        if core_score_preview is None:
-            return core_evals, metadata
-
-        # Stage 2: Deep Trigger Decision
         is_promising = core_score_preview >= self.deep_tier_threshold
         is_soft_probe = random.random() < self.exploration_prob
 
         if not is_promising and not is_soft_probe:
             # Hard prune Deep Tier due to poor Core preview
             metadata["tier_triggered"] = "core_only_pruned"
-            return core_evals, metadata
+            return []
 
-        if not is_promising and is_soft_probe:
+        if not is_promising:
             metadata["soft_probe_triggered"] = True
             metadata["tier_triggered"] = "soft_probe_audit"
 
-        # Stage 3: Gap 4 fANOVA Redundancy Pruning
-        active_subset = list(all_evals)
-        if self.enable_fanova_pruning and generation >= 4:
-            redundant_evals = self.fanova.identify_redundant_evaluators(threshold=0.04)
-            if redundant_evals:
-                # Soft-prune: Keep informative, but allow epsilon probing on redundant ones
-                kept = []
-                for e in active_subset:
-                    if e in redundant_evals:
-                        # With probability epsilon, probe it anyway to protect against silent regression
-                        if random.random() < self.exploration_prob:
-                            kept.append(e)
-                            metadata["soft_probe_triggered"] = True
-                        else:
-                            metadata["fanova_pruned"].append(e)
-                    else:
-                        kept.append(e)
-                # Ensure at least core metrics remain
-                active_subset = kept if kept else core_evals
-
-        return active_subset, metadata
+        if enable_pruning and self.enable_fanova_pruning:
+            return self._soft_prune(deep_evals, metadata)
+        return deep_evals

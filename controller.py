@@ -8,7 +8,7 @@ from core.groq_client import GroqLLMClient
 from core.mutator import PromptMutator
 from evaluation.pool import EvaluatorPool
 from optimization.bayesian_weights import BayesianWeightOptimizer
-from optimization.scoring import calculate_cost_penalized_fitness, calculate_relative_improvement
+from optimization.scoring import calculate_cost_penalized_fitness, calculate_delta_f
 from optimization.joint_sampler import JointSearchSampler
 from optimization.bandit import UCB1MutationBandit
 from optimization.fanova import FunctionalANOVA
@@ -21,6 +21,9 @@ logger = logging.getLogger(__name__)
 
 class EvolutionController:
     """Evolutionary optimization loop orchestrator implementing Gaps 1, 2, 3, 4, 5, and 6."""
+
+    # Headline metric per suite: never pruned, and kept over its correlate by the redundancy rule
+    PRIMARY_METRICS = ("mu_1_correctness", "arc_pass_at_2_test")
 
     def __init__(
         self,
@@ -36,6 +39,7 @@ class EvolutionController:
         reasoning_effort: Optional[str] = None,
         min_max_tokens: int = 0,
         acquisition_type: str = "gp_ucb",
+        fanova_window: int = 3,
     ):
         self.api_key = api_key
         self.model = model
@@ -46,6 +50,8 @@ class EvolutionController:
         self.inter_call_delay = inter_call_delay
         self.is_mock = is_mock
         self.acquisition_type = acquisition_type
+        # Spec §3.3's W: fANOVA is measured every W generations and prunes after W consecutive low windows
+        self.fanova_window = max(1, fanova_window)
         self.csv_filepath = "optimization_results.csv"
 
         # Core components
@@ -74,6 +80,7 @@ class EvolutionController:
             evaluator_pool=self.evaluator_pool,
             bayesian_optimizer=self.bayesian_optimizer,
             fanova=self.fanova,
+            prune_patience=self.fanova_window,
         )
         self.archive = PopulationArchive()
 
@@ -103,6 +110,7 @@ class EvolutionController:
             evaluator_pool=self.evaluator_pool,
             bayesian_optimizer=self.bayesian_optimizer,
             fanova=self.fanova,
+            prune_patience=self.fanova_window,
         )
         self.current_generation = 0
         self.cumulative_adaptive_cost = 0.0
@@ -349,26 +357,28 @@ class EvolutionController:
         elif active_strategy == "adaptive":
             active_strategy = "full_adaptive"
 
-        # 1. Sample Parent
-        parent = self.sampler.sample_parent(self.archive)
+        # The joint conditions search pi/idea by density ratio and (w, theta_H) by GP; the baselines keep
+        # their fixed mechanisms so the ablations stay what spec §5.1 describes.
+        joint_search = active_strategy in ["no_pruning", "full_adaptive"]
 
-        # 2. Mutate Agent (prompt + continuous theta_H knobs)
+        # 1. Sample Parent
+        parent = self.sampler.sample_parent(self.archive, use_tpe=joint_search)
+
+        # 2. Mutate Agent (prompt; theta_H takes one random-walk step inside the mutator)
         if active_strategy == "ucb1_bandit":
             selected_arm = self.bandit.select_arm()
-            child, mut_type, mut_goal = self.mutator.mutate(parent, generation=gen, strategy_tuple=selected_arm)
         else:
-            child, mut_type, mut_goal = self.mutator.mutate(parent, generation=gen)
+            selected_arm = self.sampler.sample_idea(self.mutator.get_available_strategies(), use_tpe=joint_search)
+        child, mut_type, mut_goal = self.mutator.mutate(parent, generation=gen, strategy_tuple=selected_arm)
 
-        # Gap 6: Sample continuous harness knobs (temperature, top_p)
-        child.harness_knobs = self.sampler.sample_harness_knobs(child.harness_knobs)
-
-        # 3. Propose Weights (Gap 2 & Gap 6: GP-UCB with sublinear regret)
+        # 3. Propose Weights (Gap 2 & Gap 6: GP-UCB with sublinear regret) and, for the joint conditions,
+        # theta_H from the same GP in place of the random walk
         if active_strategy == "single_metric":
             weights = {name: (1.0 if name == "mu_1_correctness" else 0.0) for name in self.metric_names}
         elif active_strategy in ["static_cascade", "ucb1_bandit"]:
             weights = {name: 1.0 / len(self.metric_names) for name in self.metric_names}
         else:  # no_pruning, full_adaptive
-            weights = self.sampler.sample_weights()
+            weights, child.harness_knobs = self.sampler.sample_continuous(child.harness_knobs)
 
         # 4. Select Benchmark Task(s): a single task, or every task of a whole benchmark (e.g. ARC)
         selector, tasks = self._resolve_tasks(task_id)
@@ -376,26 +386,30 @@ class EvolutionController:
         # 5. Execute Agent on each task
         run = self._run_agent_on_tasks(child, tasks)
 
-        # 6. Active Evaluators determination (Gap 1, 4, 5: 2-Tier Cascade + fANOVA + Epsilon-Probing)
+        # 6-7. Active Evaluators determination (Gap 1, 4, 5: 2-Tier Cascade + fANOVA + Epsilon-Probing) and
+        # evaluation (scores averaged, costs summed across tasks)
         subset_metadata: Dict[str, Any] = {}
-        if active_strategy == "single_metric":
-            active_evaluators = [self.metric_names[0]] if "mu_1_correctness" not in self.metric_names else ["mu_1_correctness"]
-        elif active_strategy in ["ucb1_bandit", "no_pruning"]:
-            active_evaluators = list(self.metric_names)
-        else:  # static_cascade, full_adaptive
-            # Multi-tier selective search: run Core first (averaged over the run's tasks)
-            core_evals = self.evaluator_pool.get_evaluators_by_tier("core")
-            core_scores, _core_costs, _ = self._evaluate_run(child, tasks, run, core_evals)
-            # Preview score across core metrics
-            core_preview = sum(core_scores.values()) / max(1, len(core_scores))
-            active_evaluators, subset_metadata = self.sampler.determine_active_evaluator_subset(
-                strategy="adaptive",
-                core_score_preview=core_preview,
-                generation=gen,
-            )
-
-        # 7. Run evaluation on active evaluators (scores averaged, costs summed across tasks)
-        scores, costs, per_task = self._evaluate_run(child, tasks, run, active_evaluators)
+        if active_strategy in ["static_cascade", "full_adaptive"]:
+            # Multi-tier selective search: run Core first, then only the deep evaluators the gate admits.
+            # The core results are reused, not re-run. fANOVA pruning is part of the full system only: the
+            # static cascade's x_E is fixed by hand (spec §5.1).
+            prune = active_strategy == "full_adaptive"
+            core_active, subset_metadata = self.sampler.select_core_subset(enable_pruning=prune)
+            scores, costs, per_task = self._evaluate_run(child, tasks, run, core_active)
+            core_preview = sum(scores.values()) / max(1, len(scores))
+            deep_active = self.sampler.select_deep_subset(core_preview, subset_metadata, enable_pruning=prune)
+            if deep_active:
+                deep_scores, deep_costs, deep_per_task = self._evaluate_run(child, tasks, run, deep_active)
+                scores = {**scores, **deep_scores}
+                costs = costs + deep_costs
+                per_task = {tid: {**s, **deep_per_task.get(tid, {})} for tid, s in per_task.items()}
+            active_evaluators = core_active + deep_active
+        else:
+            if active_strategy == "single_metric":
+                active_evaluators = [self.metric_names[0]] if "mu_1_correctness" not in self.metric_names else ["mu_1_correctness"]
+            else:  # ucb1_bandit, no_pruning
+                active_evaluators = list(self.metric_names)
+            scores, costs, per_task = self._evaluate_run(child, tasks, run, active_evaluators)
 
         # 8. Cost-Penalized Fitness Score (Gap 3)
         fitness, spent_cost = calculate_cost_penalized_fitness(
@@ -405,13 +419,14 @@ class EvolutionController:
             lambda_penalty=self.lambda_penalty,
         )
 
-        # 9. Compute Delta_F and update Bayesian GP / Bandit / fANOVA models
-        delta_f = calculate_relative_improvement(
-            child_fitness=fitness,
-            parent_fitness=parent.fitness,
-        )
-        if active_strategy in ["no_pruning", "full_adaptive"]:
-            self.bayesian_optimizer.add_observation(weights=weights, delta_f=delta_f)
+        # 9. Compute Delta_F (spec §3.2: both sides under the current w, no cost term) and update the
+        # GP / density-ratio trials / bandit / fANOVA models
+        delta_f = calculate_delta_f(child_scores=scores, parent_metrics=parent.metrics, weights=weights)
+        self.sampler.record_trial(parent_id=parent.id, idea=mut_type, delta_f=delta_f)
+        if joint_search:
+            self.bayesian_optimizer.add_observation(
+                weights=weights, delta_f=delta_f, knobs=child.harness_knobs.to_dict()
+            )
         elif active_strategy == "ucb1_bandit":
             self.bandit.update(arm_name=mut_type, reward=delta_f)
 
@@ -420,8 +435,9 @@ class EvolutionController:
         self._record_run_on_agent(child, selector, tasks, run, scores, fitness, spent_cost, active_evaluators, per_task)
         agent_solution = child.last_solution
 
-        # Update fANOVA surrogate model with observed metrics
-        self._update_fanova()
+        # fANOVA is measured once per window of W generations (spec §3.3), not every generation
+        if gen % self.fanova_window == 0:
+            self._update_fanova()
 
         # Gap 5: Check for silent regression against dimension elites
         regression_info = self.archive.detect_silent_regression(child)
@@ -479,23 +495,22 @@ class EvolutionController:
         return record
 
     def _update_fanova(self):
-        """Updates Functional ANOVA variance decomposition using historical agent evaluations."""
-        agents = self.archive.get_all_agents()
+        """Measures one pruning window (spec §3.3) over every archived agent's per-evaluator scores, then
+        advances each evaluator's below-tau streak.
+
+        Informativeness is leave-one-out (FunctionalANOVA.fit_informativeness), not the spec's literal
+        "importance of w_j": regressing an objective on the evaluators that define it credits a pure-noise
+        evaluator with the variance it injects, and with w on the simplex E[dF | w_j] has slope
+        m_j - mean_{i != j} m_i, so a noise weight looks as important as an informative one.
+        scripts/synthetic_pruning_probe.py reproduces both failures and the leave-one-out fix."""
+        agents = [a for a in self.archive.get_all_agents() if a.metrics]
         if len(agents) < 4:
             return
-
-        X_rows = []
-        y_vals = []
-        for a in agents:
-            if a.metrics and len(a.metrics) >= 3:
-                row = [a.metrics.get(m, 0.0) for m in self.metric_names]
-                X_rows.append(row)
-                y_vals.append(a.fitness)
-
-        if len(X_rows) >= 4:
-            X_mat = np.array(X_rows)
-            y_arr = np.array(y_vals)
-            self.fanova.fit(X_mat, y_arr)
+        scores = np.array([[a.metrics.get(m, np.nan) for m in self.metric_names] for a in agents], dtype=float)
+        costs = [self.evaluator_pool.evaluators[m].cost for m in self.metric_names]
+        protected = [m for m in self.PRIMARY_METRICS if m in self.metric_names] or self.metric_names[:1]
+        self.fanova.fit_informativeness(scores, costs=costs, protected=protected)
+        self.fanova.close_window()
 
     def run_n_generations(self, n: int, strategy: Optional[str] = None) -> List[Dict[str, Any]]:
         """Runs N consecutive generation cycles."""

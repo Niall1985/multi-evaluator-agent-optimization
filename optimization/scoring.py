@@ -27,3 +27,21 @@ def calculate_relative_improvement(
     Delta_F = Fitness_child - Fitness_parent
     """
     return float(child_fitness - parent_fitness)
+
+
+def calculate_delta_f(
+    child_scores: Dict[str, float],
+    parent_metrics: Dict[str, float],
+    weights: Dict[str, float],
+) -> float:
+    """Spec §3.2 GP regression target, both sides scalarized under the *current* w:
+
+        Delta_F = sum_{j in x_E} w_j mu_j(child) - sum_{j in x_E} w_j mu_j(parent)
+
+    No cost term (the cost penalty is a property of x_E, not of the weights the GP is learning), and the
+    parent is re-scalarized from its stored metrics rather than reusing `parent.fitness`, which was computed
+    under the parent's own weights and subset. Only evaluators observed on both sides are compared, so a
+    parent that was evaluated on a smaller subset does not bias the difference.
+    """
+    shared = [j for j in child_scores if j in parent_metrics]
+    return float(sum(weights.get(j, 0.0) * (child_scores[j] - parent_metrics[j]) for j in shared))
