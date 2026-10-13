@@ -193,12 +193,10 @@ The React frontend (`frontend/`) features an uncluttered, responsive **Tabbed Na
 ### 8. `Test Suite Execution Tab`
 * **Generation Pill Selector**: Inspect candidate execution for any generation (Gen 0, Gen 1, Gen 2...).
 * **Pass Rate Status**: Overall test pass rate percentage badge.
-* **Generated Code Sandbox**: Full, formatted Python code output with a one-click copy button.
-* **Assertion Table**: Individual test and edge case results with:
-  * Status Badge: **`✓ PASS`** (green) vs **`✗ FAIL`** (red).
-  * Input Arguments ($args$).
-  * Expected Return Value vs. Actual Return Value.
-  * Runtime Error / Exception Trace if failed.
+* **Generated Code / Model Invocation Sandbox**: Full, syntax-highlighted code output (Python algorithms for Coding agent; neural model invocation for Sentiment agent) with a one-click copy button.
+* **Multi-Domain Assertion & Case Results Table**:
+  * **Coding Domain**: Function call arguments (`args`), expected return value, actual evaluated result, execution status (**`✓ PASS`** vs **`✗ FAIL`**), and exception/traceback on failure.
+  * **Sentiment Analysis Domain**: Review text input, target sentiment polarity (`Positive`, `Neutral`, `Negative`), neural output prediction, confidence probability distribution, and classification status (**`✓ PASS`** vs **`✗ FAIL`**).
 
 ---
 
@@ -227,10 +225,10 @@ multi-evaluator-agent-optimization/
 │   └── fanova.py              # Gap 4: Functional ANOVA Sobol variance decomposition
 ├── tasks/
 │   ├── __init__.py
-│   └── benchmark_tasks.py     # Canonical benchmark suite (HumanEval & MBPP algorithmic tasks)
+│   └── benchmark_tasks.py     # Benchmark suites: 7 Coding (HumanEval/MBPP) + 5 Sentiment Analysis
 ├── tests/
 │   ├── __init__.py
-│   └── test_pipeline.py       # 16 unit & integration tests covering Gaps 1-6
+│   └── test_pipeline.py       # 17 comprehensive unit & integration tests covering Gaps 1-6 & domains
 ├── frontend/                  # Modern React + Vite + Tailwind UI Studio
 │   ├── src/
 │   │   ├── components/
@@ -308,18 +306,23 @@ python analyze_results.py
 
 ## 🧪 Unit & Integration Test Suite
 
-All 16 unit and integration tests verify the end-to-end functionality of all 6 research gaps:
+All 17 unit and integration tests verify the end-to-end functionality of all 6 research gaps across both Coding and Sentiment domains:
 ```powershell
-python -m pytest tests/test_pipeline.py
+python -m unittest tests.test_pipeline
 ```
 ```
-============================= test session starts =============================
-collected 16 items
+----------------------------------------------------------------------
+Ran 17 tests in ~3s
 
-tests\test_pipeline.py ................                                  [100%]
-
-============================= 16 passed in 3.01s ==============================
+OK
 ```
+Covering:
+- **Gap 1**: 2-Tier cascade evaluation, preview score gating, and active subset filtering ($x_E \in \{0, 1\}^6$).
+- **Gap 2 & 6**: Bayesian GP-UCB continuous weight optimization on probability simplex $\Delta^5$ with Matérn 5/2 kernel & Expected Improvement.
+- **Gap 3**: Unit evaluator cost accounting and scalarized cost-penalized fitness ($F = \sum w_j \mu_j - \lambda \sum c_j$).
+- **Gap 4**: Functional ANOVA (fANOVA) surrogate variance decomposition and Sobol index calculation ($S_j = V_j / V_{\text{total}}$).
+- **Gap 5**: Per-evaluator Dimension Elite archive, $\epsilon$-probing audit mechanisms, and silent regression detection ($\Delta > 0.25$).
+- **Agent Domains**: Python code synthesis sandbox execution and neural NLP `SentiToolKit` (`SentiAnalyzer`) integration with fallback handling.
 
 ---
 
