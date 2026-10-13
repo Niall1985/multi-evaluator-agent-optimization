@@ -148,21 +148,56 @@ with st.sidebar:
     ctrl.llm_client.inter_call_delay = delay_slider
 
     st.markdown("---")
+    st.markdown("### Agent Domain & Modality")
+    from core.agent import get_archetypes_by_domain, get_default_archetype
+    from tasks.benchmark_tasks import get_tasks_by_domain
+
+    domain_map = {
+        "Coding Agent (Python / Algorithms)": "coding",
+        "Sentiment Analysis Agent (SentiToolKit)": "sentiment",
+    }
+    domain_labels = list(domain_map.keys())
+    current_domain_idx = 0
+    if getattr(ctrl, "agent_domain", "coding") == "sentiment":
+        current_domain_idx = 1
+
+    selected_domain_label = st.selectbox(
+        "Agent Domain",
+        options=domain_labels,
+        index=current_domain_idx,
+        help="Select agent domain: Coding or Neural Sentiment Analysis (SentiToolKit).",
+    )
+    selected_domain = domain_map[selected_domain_label]
+    if getattr(ctrl, "agent_domain", "coding") != selected_domain:
+        ctrl.agent_domain = selected_domain
+        st.session_state.controller = EvolutionController(
+            api_key=ctrl.api_key,
+            model=ctrl.model,
+            agent_domain=selected_domain,
+            initial_archetype=get_default_archetype(selected_domain),
+            inter_call_delay=ctrl.inter_call_delay,
+            is_mock=ctrl.llm_client.is_mock,
+        )
+        st.rerun()
+
+    st.markdown("---")
     st.markdown("### Selectable Agent Archetypes")
     
-    archetype_choices = list(AGENT_ARCHETYPES.keys())
+    domain_archetypes = get_archetypes_by_domain(ctrl.agent_domain)
+    archetype_choices = list(domain_archetypes.keys())
     selected_archetype = st.selectbox(
         "Initial Seed Agent Persona",
         options=archetype_choices,
         index=archetype_choices.index(ctrl.initial_archetype) if ctrl.initial_archetype in archetype_choices else 0,
-        help="Choose among 6 distinct specialized agent archetypes to initialize and evolve.",
+        help="Choose among domain-specific specialized agent archetypes to initialize and evolve.",
     )
-    st.caption(AGENT_ARCHETYPES[selected_archetype]["description"])
+    st.caption(domain_archetypes[selected_archetype]["description"])
 
     st.markdown("---")
     st.markdown("### Selectable Benchmark Task")
 
-    task_choices = ["All Benchmark Tasks (Suite / Random)"] + [t.name for t in BENCHMARK_TASKS]
+    domain_tasks = get_tasks_by_domain(ctrl.agent_domain)
+    task_choices = [f"All {selected_domain_label} Tasks"] + [t.name for t in domain_tasks]
     current_task_idx = 0
     if ctrl.selected_task_id:
         for idx, t_name in enumerate(task_choices):
@@ -174,14 +209,14 @@ with st.sidebar:
         "Benchmark Problem / Task Input",
         options=task_choices,
         index=current_task_idx,
-        help="Select a specific coding/reasoning problem (e.g. Stock Exchange, Fibonacci, Interval Merge) or test across the full suite.",
+        help="Select a specific domain problem or benchmark across all tasks in this domain.",
     )
-    ctrl.selected_task_id = None if selected_task_name == "All Benchmark Tasks (Suite / Random)" else selected_task_name
+    ctrl.selected_task_id = None if selected_task_name.startswith("All ") else selected_task_name
     
-    if selected_task_name != "All Benchmark Tasks (Suite / Random)":
-        matched_task = next((t for t in BENCHMARK_TASKS if t.name == selected_task_name), None)
+    if not selected_task_name.startswith("All "):
+        matched_task = next((t for t in domain_tasks if t.name == selected_task_name), None)
         if matched_task:
-            st.caption(f"**Category:** {matched_task.category}\n\n**Goal:** {matched_task.description[:120]}...")
+            st.caption(f"**Type:** `{matched_task.task_type.upper()}` | **Category:** {matched_task.category}\n\n**Goal:** {matched_task.description[:120]}...")
 
     st.markdown("---")
     st.markdown("### Search & Penalty Knobs")

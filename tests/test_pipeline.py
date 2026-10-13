@@ -228,11 +228,12 @@ class TestMultiObjectiveAgentOptimization(unittest.TestCase):
 
     def test_all_7_canonical_tasks_with_runner(self):
         from evaluation.runner import CodeExecutionRunner
+        from tasks.benchmark_tasks import CODING_TASKS
         runner = CodeExecutionRunner(timeout_sec=2.0)
-        self.assertEqual(len(BENCHMARK_TASKS), 7)
+        self.assertEqual(len(CODING_TASKS), 7)
 
         # Ensure mock client produces solutions for each task that execute cleanly
-        for task in BENCHMARK_TASKS:
+        for task in CODING_TASKS:
             code = self.llm_client.generate("Write code", f"Task: {task.id}\n{task.description}")
             report = runner.run_task(
                 task=task,
@@ -389,6 +390,36 @@ class TestMultiObjectiveAgentOptimization(unittest.TestCase):
         next_w = optimizer.propose_next_weights(acquisition="gp_ucb")
         self.assertEqual(len(next_w), 3)
         self.assertAlmostEqual(sum(next_w.values()), 1.0, places=4)
+
+    def test_sentiment_analysis_agent_sentitoolkit(self):
+        """Tests that Sentiment Analysis Agent initializes with SentiToolKit and runs correctly."""
+        from core.agent import get_archetypes_by_domain, get_default_archetype
+        from tasks.benchmark_tasks import get_benchmark_task, get_tasks_by_domain
+
+        # 1. Verify domain tasks and archetypes
+        senti_tasks = get_tasks_by_domain("sentiment")
+        self.assertGreaterEqual(len(senti_tasks), 5)
+        senti_archetypes = get_archetypes_by_domain("sentiment")
+        self.assertIn("SentiToolKit Neural Specialist", senti_archetypes)
+        self.assertEqual(get_default_archetype("sentiment"), "SentiToolKit Neural Specialist")
+
+        # 2. Initialize controller for sentiment domain
+        controller = EvolutionController(
+            is_mock=True,
+            agent_domain="sentiment",
+            initial_archetype="SentiToolKit Neural Specialist",
+            selected_task_id="senti_001_product_reviews",
+        )
+        self.assertEqual(controller.agent_domain, "sentiment")
+        self.assertEqual(controller.initial_archetype, "SentiToolKit Neural Specialist")
+
+        # 3. Run generation cycle
+        record = controller.run_generation(strategy="full_adaptive", task_id="senti_001_product_reviews")
+        self.assertEqual(record["domain"], "sentiment")
+        self.assertEqual(record["task_id"], "senti_001_product_reviews")
+        self.assertIn("test_suite", record)
+        self.assertGreater(record["test_suite"]["total_count"], 0)
+        self.assertGreater(record["test_suite"]["passed_count"], 0)
 
 
 if __name__ == "__main__":

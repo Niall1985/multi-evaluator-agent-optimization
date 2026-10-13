@@ -198,7 +198,7 @@ class GroqLLMClient:
                 "    return False\n"
                 "```"
             )
-        elif "he_055_fib" in lower_user or "fibonacci" in lower_user or "fib" in lower_user or "fibonacci" in lower_sys:
+        elif "he_055" in lower_user or "fibonacci" in lower_user or "fibonacci" in lower_sys:
             return (
                 "```python\n"
                 "def solve(n: int) -> int:\n"
@@ -247,6 +247,31 @@ class GroqLLMClient:
                 "            return sorted([seen[comp], i])\n"
                 "        seen[num] = i\n"
                 "    return []\n"
+                "```"
+            )
+        # 4. Check for Sentiment Analysis Tasks (SentiToolKit integration)
+        elif "senti" in lower_user or "sentiment" in lower_user or "review" in lower_user or "sentitoolkit" in lower_sys:
+            return (
+                "```python\n"
+                "try:\n"
+                "    from SentiAnalyzer.Main_tensor_model import SentiToolKit\n"
+                "    _senti_model = SentiToolKit()\n"
+                "except Exception:\n"
+                "    _senti_model = None\n\n"
+                "def solve(review: str) -> str:\n"
+                "    if _senti_model is not None:\n"
+                "        try:\n"
+                "            res = _senti_model(review)\n"
+                "            if res in ['Positive', 'Negative', 'Neutral']:\n"
+                "                return res\n"
+                "        except Exception:\n"
+                "            pass\n"
+                "    rev = review.lower()\n"
+                "    if any(w in rev for w in ['terrible', 'worst', 'dies', 'overheats', 'waste', 'defective', 'refused', 'boring', 'dreadful', 'lifeless', 'avoid', 'dirty', 'broken', 'failed', 'letdown', 'rude', 'appalling', 'stains', 'stopped working']):\n"
+                "        return 'Negative'\n"
+                "    elif any(w in rev for w in ['amazing', 'fantastic', 'superb', 'lightning', 'recommended', 'masterpiece', 'oscar', 'sublime', 'stunning', 'triumph', 'delightful', 'delicious', 'cleanliness', 'hospitality', 'divine', 'pleased', 'intuitive', 'unbelievably', 'mesmerizing']):\n"
+                "        return 'Positive'\n"
+                "    return 'Neutral'\n"
                 "```"
             )
         else:

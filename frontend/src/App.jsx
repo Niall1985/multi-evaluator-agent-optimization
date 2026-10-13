@@ -25,6 +25,7 @@ export default function App() {
   const [metadata, setMetadata] = useState(null);
 
   // Form Controls
+  const [agentDomain, setAgentDomain] = useState('coding');
   const [strategy, setStrategy] = useState('full_adaptive');
   const [selectedTask, setSelectedTask] = useState(null);
   const [archetype, setArchetype] = useState('General Balanced Assistant');
@@ -45,6 +46,9 @@ export default function App() {
       ]);
 
       setStatus(statusRes);
+      if (statusRes.agent_domain && !agentDomain) {
+        setAgentDomain(statusRes.agent_domain);
+      }
       setTelemetry(statusRes.telemetry);
       setCurrentGen(statusRes.current_generation);
       setFanova(fanovaRes);
@@ -61,6 +65,40 @@ export default function App() {
   useEffect(() => {
     fetchData();
   }, []);
+
+  // Switch agent domain and reset population
+  const handleDomainChange = async (newDomain) => {
+    setAgentDomain(newDomain);
+    setSelectedTask(null);
+    const defaultArch =
+      newDomain === 'sentiment'
+        ? 'SentiToolKit Neural Specialist'
+        : 'General Balanced Assistant';
+    setArchetype(defaultArch);
+
+    setIsRunning(true);
+    setErrorMsg(null);
+    try {
+      const res = await fetch('/api/reset', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          agent_domain: newDomain,
+          archetype: defaultArch,
+          task_id: null,
+          acquisition_type: acquisitionType,
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        await fetchData();
+      }
+    } catch (err) {
+      setErrorMsg('Failed to switch agent domain.');
+    } finally {
+      setIsRunning(false);
+    }
+  };
 
   // Run Step(s)
   const handleRunStep = async (nSteps = 1) => {
@@ -98,6 +136,7 @@ export default function App() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          agent_domain: agentDomain,
           archetype: archetype,
           task_id: selectedTask,
           acquisition_type: acquisitionType,
@@ -135,6 +174,8 @@ export default function App() {
 
         {/* Interactive Experiment Controls */}
         <ControlPanel
+          agentDomain={agentDomain}
+          onDomainChange={handleDomainChange}
           metadata={metadata}
           strategy={strategy}
           setStrategy={setStrategy}

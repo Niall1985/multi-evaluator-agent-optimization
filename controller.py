@@ -2,7 +2,7 @@ import time
 import logging
 import numpy as np
 from typing import Dict, List, Any, Optional
-from core.agent import Agent, HarnessKnobs, AGENT_ARCHETYPES
+from core.agent import Agent, HarnessKnobs, AGENT_ARCHETYPES, get_default_archetype, get_archetypes_by_domain
 from core.archive import PopulationArchive
 from core.groq_client import GroqLLMClient
 from core.mutator import PromptMutator
@@ -12,13 +12,13 @@ from optimization.scoring import calculate_cost_penalized_fitness, calculate_rel
 from optimization.joint_sampler import JointSearchSampler
 from optimization.bandit import UCB1MutationBandit
 from optimization.fanova import FunctionalANOVA
-from tasks.benchmark_tasks import BENCHMARK_TASKS, BenchmarkTask, get_random_task, get_benchmark_task
+from tasks.benchmark_tasks import BENCHMARK_TASKS, BenchmarkTask, get_random_task, get_benchmark_task, get_tasks_by_domain
 
 logger = logging.getLogger(__name__)
 
 
 class EvolutionController:
-    """Evolutionary optimization loop orchestrator implementing Gaps 1, 2, 3, 4, 5, and 6."""
+    """Evolutionary optimization loop orchestrator implementing Gaps 1, 2, 3, 4, 5, and 6 across Coding and Sentiment agents."""
 
     def __init__(
         self,
@@ -26,17 +26,19 @@ class EvolutionController:
         model: str = "openai/gpt-oss-120b",
         lambda_penalty: float = 0.5,
         default_strategy: str = "full_adaptive",
-        initial_archetype: str = "General Balanced Assistant",
+        initial_archetype: Optional[str] = None,
         selected_task_id: Optional[str] = None,
         inter_call_delay: float = 1.5,
         is_mock: Optional[bool] = None,
         acquisition_type: str = "gp_ucb",
+        agent_domain: str = "coding",
     ):
         self.api_key = api_key
         self.model = model
         self.lambda_penalty = lambda_penalty
         self.default_strategy = default_strategy
-        self.initial_archetype = initial_archetype
+        self.agent_domain = agent_domain
+        self.initial_archetype = initial_archetype or get_default_archetype(agent_domain)
         self.selected_task_id = selected_task_id
         self.inter_call_delay = inter_call_delay
         self.is_mock = is_mock
@@ -75,10 +77,19 @@ class EvolutionController:
         # Initialize seed population
         self.initialize_seed(archetype_name=self.initial_archetype, task_id=self.selected_task_id)
 
-    def reset(self, initial_archetype: Optional[str] = None, selected_task_id: Optional[str] = None):
+    def reset(
+        self,
+        initial_archetype: Optional[str] = None,
+        selected_task_id: Optional[str] = None,
+        agent_domain: Optional[str] = None,
+    ):
         """Resets the controller state, archive, and optimizers."""
+        if agent_domain:
+            self.agent_domain = agent_domain
         if initial_archetype:
             self.initial_archetype = initial_archetype
+        elif agent_domain:
+            self.initial_archetype = get_default_archetype(self.agent_domain)
         if selected_task_id is not None:
             self.selected_task_id = selected_task_id
         self.archive = PopulationArchive()
@@ -107,7 +118,8 @@ class EvolutionController:
     ):
         """Creates and evaluates the generation 0 seed baseline agent using selected archetype."""
         arch_name = archetype_name or self.initial_archetype
-        arch_info = AGENT_ARCHETYPES.get(arch_name, AGENT_ARCHETYPES["General Balanced Assistant"])
+        default_arch = get_default_archetype(self.agent_domain)
+        arch_info = AGENT_ARCHETYPES.get(arch_name) or AGENT_ARCHETYPES.get(default_arch, list(AGENT_ARCHETYPES.values())[0])
 
         prompt = seed_prompt or arch_info["system_prompt"]
         knobs = arch_info["harness_knobs"]
@@ -117,6 +129,7 @@ class EvolutionController:
             id=f"agent_seed_{id_suffix}_g0",
             parent_id=None,
             generation=0,
+            domain=self.agent_domain,
             system_prompt=prompt,
             harness_knobs=HarnessKnobs(
                 temperature=knobs.temperature,
@@ -239,7 +252,7 @@ class EvolutionController:
             found = get_benchmark_task(target)
             if found:
                 return found
-        return get_random_task()
+        return get_random_task(domain=self.agent_domain)
 
     def run_generation(self, strategy: Optional[str] = None, task_id: Optional[str] = None) -> Dict[str, Any]:
         """Runs a single generation step of the multi-objective optimization loop across 5 conditions."""
@@ -413,6 +426,7 @@ class EvolutionController:
             "weights": weights,
             "metrics": scores,
             "task_id": task.id,
+            "domain": self.agent_domain,
             "mutation_type": child.mutation_type,
             "mutation_goal": mut_goal,
             "silent_regression": regression_info,
@@ -496,6 +510,7 @@ class EvolutionController:
 
         return {
             "total_generations": self.current_generation,
+            "agent_domain": self.agent_domain,
             "best_fitness": best_agent.fitness if best_agent else 0.0,
             "best_agent_id": best_agent.id if best_agent else "N/A",
             "cumulative_cost_spent": self.cumulative_adaptive_cost,

@@ -1,7 +1,28 @@
 import React, { useState } from 'react';
-import { Play, FastForward, RotateCcw, Sliders, CheckCircle2 } from 'lucide-react';
+import { Play, FastForward, RotateCcw, Sliders, CheckCircle2, Code, Smile } from 'lucide-react';
+
+const DOMAIN_OPTIONS = [
+  {
+    id: 'coding',
+    name: 'Coding Agent',
+    badge: 'Python & Algorithms',
+    icon: Code,
+    desc: 'HumanEval / MBPP benchmark tasks with unit & edge-case test suites',
+    color: 'emerald',
+  },
+  {
+    id: 'sentiment',
+    name: 'Sentiment Analysis Agent',
+    badge: 'SentiToolKit Neural',
+    icon: Smile,
+    desc: 'SentiAnalyzer neural classification (Positive, Negative, Neutral) with contrastive & negation suites',
+    color: 'sky',
+  },
+];
 
 export default function ControlPanel({
+  agentDomain = 'coding',
+  onDomainChange,
   metadata,
   strategy,
   setStrategy,
@@ -17,17 +38,87 @@ export default function ControlPanel({
 }) {
   const [batchSize, setBatchSize] = useState(5);
 
+  // Filter tasks and archetypes by active domain
+  const filteredTasks = (metadata?.tasks || []).filter(
+    (t) => !t.domain || t.domain === agentDomain
+  );
+
+  const filteredArchetypes =
+    metadata?.archetypes_by_domain?.[agentDomain] || metadata?.archetypes || [];
+
   return (
-    <div className="bg-slate-900/80 border border-slate-800 rounded-xl p-5 shadow-lg backdrop-blur">
-      <div className="flex items-center justify-between pb-4 border-b border-slate-800/80 mb-4">
-        <div className="flex items-center space-x-2">
-          <Sliders className="w-5 h-5 text-emerald-400" />
-          <h2 className="text-base font-semibold text-white">Interactive Experiment Controls</h2>
+    <div className="bg-slate-900/80 border border-slate-800 rounded-xl p-5 shadow-lg backdrop-blur space-y-4">
+      {/* Domain Selection Header */}
+      <div>
+        <div className="flex items-center justify-between pb-3 border-b border-slate-800/80 mb-3">
+          <div className="flex items-center space-x-2">
+            <Sliders className="w-5 h-5 text-emerald-400" />
+            <h2 className="text-base font-semibold text-white">Target Agent Domain</h2>
+          </div>
+          <span className="text-xs text-slate-400">Choose specialized agent domain to benchmark & evolve</span>
         </div>
-        <span className="text-xs text-slate-400">Configure parameters & step generation</span>
+
+        {/* 2 Domain Radio Cards */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          {DOMAIN_OPTIONS.map((opt) => {
+            const Icon = opt.icon;
+            const isSelected = agentDomain === opt.id;
+            return (
+              <button
+                key={opt.id}
+                type="button"
+                onClick={() => onDomainChange && onDomainChange(opt.id)}
+                disabled={isRunning}
+                className={`flex flex-col text-left p-3.5 rounded-xl border transition-all ${
+                  isSelected
+                    ? opt.id === 'coding'
+                      ? 'bg-emerald-950/40 border-emerald-500/80 ring-1 ring-emerald-500/50 shadow-md shadow-emerald-950/40'
+                      : opt.id === 'sentiment'
+                      ? 'bg-sky-950/40 border-sky-500/80 ring-1 ring-sky-500/50 shadow-md shadow-sky-950/40'
+                      : 'bg-amber-950/40 border-amber-500/80 ring-1 ring-amber-500/50 shadow-md shadow-amber-950/40'
+                    : 'bg-slate-950/60 border-slate-800 hover:border-slate-700 text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                <div className="flex items-center justify-between w-full mb-1">
+                  <div className="flex items-center space-x-2">
+                    <Icon
+                      className={`w-4 h-4 ${
+                        isSelected
+                          ? opt.id === 'coding'
+                            ? 'text-emerald-400'
+                            : opt.id === 'sentiment'
+                            ? 'text-sky-400'
+                            : 'text-amber-400'
+                          : 'text-slate-500'
+                      }`}
+                    />
+                    <span className={`text-xs font-bold ${isSelected ? 'text-white' : 'text-slate-300'}`}>
+                      {opt.name}
+                    </span>
+                  </div>
+                  <span
+                    className={`text-[10px] font-mono px-2 py-0.5 rounded-full ${
+                      isSelected
+                        ? opt.id === 'coding'
+                          ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                          : opt.id === 'sentiment'
+                          ? 'bg-sky-500/20 text-sky-300 border border-sky-500/30'
+                          : 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                        : 'bg-slate-800 text-slate-500'
+                    }`}
+                  >
+                    {opt.badge}
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-400 leading-relaxed mt-1">{opt.desc}</p>
+              </button>
+            );
+          })}
+        </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-5">
+      {/* Main Parameters Grid */}
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4 pt-2">
         {/* Strategy Selector */}
         <div>
           <label className="block text-xs font-medium text-slate-400 mb-1.5">Condition / Strategy</label>
@@ -47,17 +138,19 @@ export default function ControlPanel({
 
         {/* Benchmark Task */}
         <div>
-          <label className="block text-xs font-medium text-slate-400 mb-1.5">Benchmark Target Task</label>
+          <label className="block text-xs font-medium text-slate-400 mb-1.5">
+            Target Benchmark Task ({filteredTasks.length} in domain)
+          </label>
           <select
             value={selectedTask || ''}
             onChange={(e) => setSelectedTask(e.target.value || null)}
             disabled={isRunning}
             className="w-full bg-slate-950 border border-slate-700/80 text-white rounded-lg px-3 py-2 text-xs focus:ring-1 focus:ring-emerald-500 focus:outline-none"
           >
-            <option value="">All Benchmark Tasks (Suite / Random)</option>
-            {metadata?.tasks?.map((t) => (
+            <option value="">All Tasks in Domain (Randomized)</option>
+            {filteredTasks.map((t) => (
               <option key={t.id} value={t.id}>
-                {t.id} - {t.name}
+                [{t.task_type ? t.task_type.toUpperCase() : 'CODE'}] {t.name}
               </option>
             ))}
           </select>
@@ -72,7 +165,7 @@ export default function ControlPanel({
             disabled={isRunning}
             className="w-full bg-slate-950 border border-slate-700/80 text-white rounded-lg px-3 py-2 text-xs focus:ring-1 focus:ring-emerald-500 focus:outline-none"
           >
-            {metadata?.archetypes?.map((a) => (
+            {filteredArchetypes.map((a) => (
               <option key={a} value={a}>
                 {a}
               </option>

@@ -31,7 +31,11 @@ class HarnessKnobs:
 
 
 AGENT_ARCHETYPES: Dict[str, Dict[str, Any]] = {
+    # -------------------------------------------------------------
+    # CODING AGENT ARCHETYPES
+    # -------------------------------------------------------------
     "General Balanced Assistant": {
+        "domain": "coding",
         "id_suffix": "general",
         "description": "Balanced baseline assistant prioritizing clarity, correctness, and moderate conciseness.",
         "system_prompt": (
@@ -41,6 +45,7 @@ AGENT_ARCHETYPES: Dict[str, Dict[str, Any]] = {
         "harness_knobs": HarnessKnobs(temperature=0.7, max_retries=2, top_p=0.95, max_tokens=1024),
     },
     "Algorithmic Specialist Agent": {
+        "domain": "coding",
         "id_suffix": "algorithmic",
         "description": "Specialized in optimal asymptotic time complexity O(N)/O(log N) and space complexity O(1).",
         "system_prompt": (
@@ -51,6 +56,7 @@ AGENT_ARCHETYPES: Dict[str, Dict[str, Any]] = {
         "harness_knobs": HarnessKnobs(temperature=0.5, max_retries=2, top_p=0.90, max_tokens=1024),
     },
     "Defensive & Fault-Tolerant Agent": {
+        "domain": "coding",
         "id_suffix": "defensive",
         "description": "Specialized in corner-case validation, exception trapping, and boundary condition resilience.",
         "system_prompt": (
@@ -61,6 +67,7 @@ AGENT_ARCHETYPES: Dict[str, Dict[str, Any]] = {
         "harness_knobs": HarnessKnobs(temperature=0.4, max_retries=3, top_p=0.90, max_tokens=1024),
     },
     "Chain-of-Thought Reasoning Agent": {
+        "domain": "coding",
         "id_suffix": "cot",
         "description": "Mandates explicit step-by-step invariant reasoning and logical decomposition before code synthesis.",
         "system_prompt": (
@@ -71,6 +78,7 @@ AGENT_ARCHETYPES: Dict[str, Dict[str, Any]] = {
         "harness_knobs": HarnessKnobs(temperature=0.6, max_retries=2, top_p=0.95, max_tokens=1024),
     },
     "Minimalist Economy Synthesizer": {
+        "domain": "coding",
         "id_suffix": "minimalist",
         "description": "Ultra-concise agent minimizing token footprint and maximizing response speed with zero commentary.",
         "system_prompt": (
@@ -80,6 +88,7 @@ AGENT_ARCHETYPES: Dict[str, Dict[str, Any]] = {
         "harness_knobs": HarnessKnobs(temperature=0.3, max_retries=1, top_p=0.85, max_tokens=512),
     },
     "Safety & Constraint-Aligned Agent": {
+        "domain": "coding",
         "id_suffix": "safety",
         "description": "Strict compliance with safety constraints, type signatures, and anti-hallucination guarantees.",
         "system_prompt": (
@@ -88,7 +97,69 @@ AGENT_ARCHETYPES: Dict[str, Dict[str, Any]] = {
         ),
         "harness_knobs": HarnessKnobs(temperature=0.3, max_retries=2, top_p=0.90, max_tokens=1024),
     },
+
+    # -------------------------------------------------------------
+    # SENTIMENT ANALYSIS AGENT ARCHETYPES (SentiToolKit)
+    # -------------------------------------------------------------
+    "SentiToolKit Neural Specialist": {
+        "domain": "sentiment",
+        "id_suffix": "sentitoolkit",
+        "description": "Harnesses SentiAnalyzer SentiToolKit neural model for highly calibrated sentiment classification.",
+        "system_prompt": (
+            "You are an expert Sentiment Analysis Specialist powered by SentiAnalyzer's SentiToolKit tensor model. "
+            "Given text reviews, synthesize clean Python functions using `from SentiAnalyzer.Main_tensor_model import SentiToolKit` "
+            "to classify input into 'Positive', 'Negative', or 'Neutral'. "
+            "Handle edge cases, neutral statements, and multi-clause reviews accurately."
+        ),
+        "harness_knobs": HarnessKnobs(temperature=0.4, max_retries=2, top_p=0.90, max_tokens=512),
+    },
+    "Nuance & Aspect Sentiment Reasoner": {
+        "domain": "sentiment",
+        "id_suffix": "senti_nuance",
+        "description": "Expert in resolving contrastive conjunctions ('but', 'however', 'although') and aspect weighting.",
+        "system_prompt": (
+            "You are a linguistic sentiment reasoning agent. For every review: "
+            "1. Deconstruct contrastive clauses to identify the primary dominant polarity clause. "
+            "2. Leverage SentiToolKit to classify the final dominant polarity as 'Positive', 'Negative', or 'Neutral'. "
+            "Output verified, deterministic Python code solving the task."
+        ),
+        "harness_knobs": HarnessKnobs(temperature=0.5, max_retries=2, top_p=0.95, max_tokens=512),
+    },
+    "Sarcasm & Negation Analyst": {
+        "domain": "sentiment",
+        "id_suffix": "senti_negation",
+        "description": "Specialized in double negations ('not bad at all'), sarcasm, and subtle polarity shifts.",
+        "system_prompt": (
+            "You are a defensive sentiment analyst specialized in detecting double negations, ironic praise, and subtle idioms. "
+            "Accurately map negations without polarity inversion and classify into 'Positive', 'Negative', or 'Neutral' using SentiToolKit."
+        ),
+        "harness_knobs": HarnessKnobs(temperature=0.3, max_retries=3, top_p=0.85, max_tokens=512),
+    },
+    "Fast Production Sentiment Classifier": {
+        "domain": "sentiment",
+        "id_suffix": "senti_fast",
+        "description": "High-throughput sentiment classifier minimizing latency and returning exact category tokens.",
+        "system_prompt": (
+            "You are a fast, production sentiment classifier. Deliver pure Python code using SentiToolKit "
+            "returning strictly 'Positive', 'Negative', or 'Neutral'. Zero filler."
+        ),
+        "harness_knobs": HarnessKnobs(temperature=0.2, max_retries=1, top_p=0.80, max_tokens=256),
+    },
+
+    # -------------------------------------------------------------
 }
+
+
+def get_archetypes_by_domain(domain: str) -> Dict[str, Dict[str, Any]]:
+    """Returns archetypes filtered by domain ('coding', 'sentiment')."""
+    return {k: v for k, v in AGENT_ARCHETYPES.items() if v.get("domain", "coding") == domain}
+
+
+def get_default_archetype(domain: str) -> str:
+    """Returns the default archetype name for a given domain."""
+    if domain == "sentiment":
+        return "SentiToolKit Neural Specialist"
+    return "General Balanced Assistant"
 
 
 @dataclass
@@ -97,6 +168,7 @@ class Agent:
     id: str = field(default_factory=lambda: f"agent_{uuid.uuid4().hex[:8]}")
     parent_id: Optional[str] = None
     generation: int = 0
+    domain: str = "coding"  # 'coding' | 'sentiment'
     system_prompt: str = (
         "You are an expert, precise, and robust AI coding assistant. "
         "Solve the given problem clearly, accurately, and efficiently with minimal fluff."
@@ -125,6 +197,7 @@ class Agent:
             "id": self.id,
             "parent_id": self.parent_id,
             "generation": self.generation,
+            "domain": self.domain,
             "system_prompt": self.system_prompt,
             "user_template": self.user_template,
             "harness_knobs": self.harness_knobs.to_dict(),
@@ -146,6 +219,7 @@ class Agent:
             id=new_id,
             parent_id=self.id,
             generation=generation,
+            domain=self.domain,
             system_prompt=self.system_prompt,
             user_template=self.user_template,
             harness_knobs=HarnessKnobs(

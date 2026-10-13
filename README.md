@@ -101,6 +101,40 @@ This framework introduces a **joint discrete-continuous optimization system** so
 
 ---
 
+## 🤖 The 2 Specialized Agent Domains & Benchmark Suites
+
+The framework supports multi-objective evolution and benchmarking across **2 distinct agent domains**:
+
+### 1. Python Coding Agent (`coding`)
+* **Core Modality**: Code synthesis, algorithmic problem-solving, dynamic programming, and edge-case handling.
+* **7 Canonical Benchmark Tasks**:
+  1. `he_000_has_close_elements`: Float proximity checks with precision tolerance (HumanEval/0).
+  2. `he_003_below_zero`: Prefix scan bank account balance underflow (HumanEval/3).
+  3. `he_055_fib`: Dynamic programming Fibonacci sequence computation (HumanEval/55).
+  4. `mbpp_006_differ_bits`: Bitwise XOR power-of-two differ-by-one bit check (MBPP/6).
+  5. `mbpp_274_stock_exchange`: Maximum single-transaction stock profit (MBPP/274).
+  6. `task_valid_parentheses`: Bracket matching and stack validation.
+  7. `task_two_sum`: Optimal hash-map two-sum index lookup.
+* **6 Specialized Archetypes**: General Balanced Assistant, Defensive Edge-Case Engineer, Chain-of-Thought Analytic Agent, Asymptotic Complexity Optimizer, Minimalist Economy Synthesizer, Safety & Constraint-Aligned Agent.
+
+---
+
+### 2. Sentiment Analysis Agent (`sentiment`)
+* **Core Modality**: Tensor-based NLP sentiment analysis powered by the user's proprietary neural package:
+  ```python
+  from SentiAnalyzer.Main_tensor_model import SentiToolKit
+  ```
+* **Neural Architecture**: Employs pre-trained Keras sequential neural embeddings (`SentiToolKit.keras`) and pickle tokenizer (`tokenizer.pkl`), generating probability distributions across `[Negative, Neutral, Positive]`.
+* **5 Comprehensive Benchmark Suites**:
+  1. `senti_001_product_reviews`: E-commerce hardware and consumer electronics feedback with subtle satisfaction indicators.
+  2. `senti_002_movie_critiques`: Nuanced cinematic reviews evaluating acting, pacing, and artistic direction.
+  3. `senti_003_contrastive_clauses`: Complex compound reviews with contrastive conjunctions (*"great screen, but the battery dies in 2 hours"*), evaluating dominant clause polarity extraction.
+  4. `senti_004_negation_sarcasm`: Double negations (*"not bad at all"*, *"hardly a disappointment"*) and ironic compliments.
+  5. `senti_005_aspect_service`: Multi-aspect hospitality, food quality, and customer service reviews.
+* **4 Specialized Archetypes**: SentiToolKit Neural Specialist, Nuance & Aspect Sentiment Reasoner, Sarcasm & Negation Analyst, Fast Production Sentiment Classifier.
+
+---
+
 ## 📊 Concrete Evaluator Suite Matrix
 
 | Metric | Dimension | Tier | Type | Unit Cost ($c_j$) |

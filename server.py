@@ -32,7 +32,8 @@ class StepRequest(BaseModel):
 
 
 class ResetRequest(BaseModel):
-    archetype: Optional[str] = "General Balanced Assistant"
+    agent_domain: Optional[str] = "coding"
+    archetype: Optional[str] = None
     task_id: Optional[str] = None
     lambda_penalty: Optional[float] = 0.5
     acquisition_type: Optional[str] = "gp_ucb"
@@ -47,6 +48,7 @@ def get_status():
     return {
         "telemetry": telemetry,
         "current_generation": controller.current_generation,
+        "agent_domain": controller.agent_domain,
         "selected_task_id": controller.selected_task_id,
         "initial_archetype": controller.initial_archetype,
         "strategy": controller.default_strategy,
@@ -58,6 +60,7 @@ def get_status():
             "system_prompt": best_agent.system_prompt if best_agent else "",
             "metrics": best_agent.metrics if best_agent else {},
             "mutation_type": best_agent.mutation_type if best_agent else "",
+            "domain": best_agent.domain if best_agent else "coding",
         } if best_agent else None,
     }
 
@@ -146,13 +149,37 @@ def get_pareto():
 
 @app.get("/api/metadata")
 def get_metadata():
-    """Returns metadata for selectors (tasks, archetypes, strategies)."""
+    """Returns metadata for selectors (domains, tasks, archetypes, strategies)."""
     return {
+        "agent_domains": [
+            {
+                "id": "coding",
+                "name": "Coding Agent",
+                "description": "Python synthesis, algorithmic problem solving & edge case compliance",
+            },
+            {
+                "id": "sentiment",
+                "name": "Sentiment Analysis Agent",
+                "description": "Tensor-based NLP sentiment analysis powered by SentiToolKit",
+            },
+        ],
         "tasks": [
-            {"id": t.id, "name": t.name, "description": t.description, "difficulty": getattr(t, "difficulty", "Medium")}
+            {
+                "id": t.id,
+                "name": t.name,
+                "category": t.category,
+                "description": t.description,
+                "domain": getattr(t, "domain", "coding"),
+                "task_type": getattr(t, "task_type", "code"),
+                "difficulty": getattr(t, "difficulty", "Medium"),
+            }
             for t in BENCHMARK_TASKS
         ],
         "archetypes": list(AGENT_ARCHETYPES.keys()),
+        "archetypes_by_domain": {
+            "coding": [k for k, v in AGENT_ARCHETYPES.items() if v.get("domain", "coding") == "coding"],
+            "sentiment": [k for k, v in AGENT_ARCHETYPES.items() if v.get("domain") == "sentiment"],
+        },
         "strategies": [
             {"id": "full_adaptive", "name": "Full Adaptive (Joint BO + fANOVA + Epsilon-Probe)"},
             {"id": "no_pruning", "name": "Ablation 1: No Pruning (Always All 6 Evaluators)"},
@@ -184,16 +211,26 @@ def run_step(req: StepRequest):
 
 @app.post("/api/reset")
 def reset_controller(req: ResetRequest):
-    """Resets the optimization population and state."""
+    """Resets the optimization population and state with domain support."""
     global controller
+    from core.agent import get_default_archetype
+    domain = req.agent_domain or "coding"
+    default_arch = get_default_archetype(domain)
     controller = EvolutionController(
         is_mock=req.is_mock if req.is_mock is not None else True,
-        initial_archetype=req.archetype or "General Balanced Assistant",
+        agent_domain=domain,
+        initial_archetype=req.archetype or default_arch,
         selected_task_id=req.task_id,
         lambda_penalty=req.lambda_penalty if req.lambda_penalty is not None else 0.5,
         acquisition_type=req.acquisition_type or "gp_ucb",
     )
-    return {"success": True, "message": "Controller reset successfully."}
+    return {
+        "success": True,
+        "message": f"Controller reset successfully for domain: {domain}",
+        "agent_domain": domain,
+        "initial_archetype": controller.initial_archetype,
+        "selected_task_id": controller.selected_task_id,
+    }
 
 
 # Mount built frontend static files if present
