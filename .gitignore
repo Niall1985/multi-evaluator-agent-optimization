@@ -10,3 +10,6 @@ frontend/node_modules/
 
 # full ARC-AGI Kaggle download (ARC_DATA_ROOT); the 4-task sample stays in benchmarks/arc_challenge/data
 data/
+
+# archived live runs
+runs/

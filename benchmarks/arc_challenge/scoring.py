@@ -12,6 +12,7 @@ the evaluators in `evaluators.py` (official metrics) and `partial_evaluators.py`
 from typing import Any, Dict, List, Optional, Sequence
 
 from evaluation.runner import CodeExecutionRunner
+from evaluation.sandbox import run_program
 from benchmarks.benchmark_tasks import BenchmarkTask
 
 Grid = List[List[int]]
@@ -66,22 +67,6 @@ def pass_at_2_multi(attempts_per_example: Sequence[Sequence[Any]], truths: Seque
     return sum(pass_at_2_single(a, t) for a, t in zip(attempts_per_example, truths)) / len(truths)
 
 
-def _load_attempt_functions(agent_output: str, entry_point: str = "solve"):
-    """Execs candidate code; returns (attempt_fns, error). Prefers OpenEvolve's two attempts, else `solve`."""
-    code = CodeExecutionRunner.extract_code(agent_output)
-    namespace: Dict[str, Any] = {}
-    try:
-        exec(code, namespace)
-    except Exception as e:  # noqa: BLE001 - candidate code is untrusted
-        return [], f"{type(e).__name__}: {e}"
-    fns = [namespace[n] for n in ATTEMPT_FUNCTIONS if callable(namespace.get(n))]
-    if not fns and callable(namespace.get(entry_point)):
-        fns = [namespace[entry_point]]
-    if not fns:
-        return [], f"No `{entry_point}` or {ATTEMPT_FUNCTIONS} found."
-    return fns, None
-
-
 def score_arc_cases(
     cases: Sequence[Dict[str, Any]],
     agent_output: str,
@@ -93,9 +78,16 @@ def score_arc_cases(
     Always includes `runs_successfully` and `combined_score` (mean pass@2); per example
     `{prefix}_{i}_pass_at_2`, `{prefix}_{i}_attempt_{j}` and `..._pixel_acc`. Raw attempt
     outputs are returned under `outputs` for partial-credit evaluators to reuse.
+
+    The program runs in a child process (evaluation.sandbox) with a per-call time limit; it uses OpenEvolve's
+    two attempt functions when present, else `entry_point`.
     """
-    fns, err = _load_attempt_functions(agent_output, entry_point)
-    if err:
+    code = CodeExecutionRunner.extract_code(agent_output)
+    run = run_program(code, [ATTEMPT_FUNCTIONS[:2], (entry_point,)], [tuple(case["args"]) for case in cases])
+    if run.load_error:
+        return {"runs_successfully": 0.0, "combined_score": 0.0, "error": run.load_error, "outputs": []}
+    if not run.functions:
+        err = f"No `{entry_point}` or {ATTEMPT_FUNCTIONS} found."
         return {"runs_successfully": 0.0, "combined_score": 0.0, "error": err, "outputs": []}
 
     metrics: Dict[str, Any] = {"runs_successfully": 1.0}
@@ -104,15 +96,12 @@ def score_arc_cases(
     outputs: List[List[Any]] = []
 
     for i, case in enumerate(cases):
-        grid_in = case["args"][0]
         truth = case["expected"]
         attempts: List[Any] = []
-        for j, fn in enumerate(fns[:2]):
-            try:
-                out = fn(grid_in)
-            except Exception as e:  # noqa: BLE001
-                out = None
-                errors.append(f"{prefix}_{i}_attempt_{j}: {type(e).__name__}: {e}")
+        for j, (status, value) in enumerate(run.results[i]):
+            out = value if status == "ok" else None
+            if status != "ok":
+                errors.append(f"{prefix}_{i}_attempt_{j}: {value}")
             attempts.append(out)
             metrics[f"{prefix}_{i}_attempt_{j}"] = grids_equal(out, truth)
             metrics[f"{prefix}_{i}_attempt_{j}_pixel_acc"] = round(pixel_accuracy(out, truth), 4)

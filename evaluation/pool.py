@@ -1,6 +1,6 @@
 from typing import Dict, List, Any, Tuple
 from core.agent import Agent
-from core.groq_client import GroqLLMClient
+from core.llm import LLMClient
 from .base import BaseEvaluator, EvaluatorResult
 from .metrics import (
     FunctionalCorrectnessEvaluator,
@@ -15,7 +15,7 @@ from .metrics import (
 class EvaluatorPool:
     """Orchestrates evaluator registration and runs selective subsets x_E on candidate agents."""
 
-    def __init__(self, llm_client: GroqLLMClient, register_defaults: bool = True):
+    def __init__(self, llm_client: LLMClient, register_defaults: bool = True):
         self.llm_client = llm_client
         self.evaluators: Dict[str, BaseEvaluator] = {}
         if register_defaults:

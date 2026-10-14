@@ -252,6 +252,10 @@ uv run streamlit run app.py
 uv run pytest
 ```
 
+### 5. Run on a self-hosted model (vLLM on Modal, llama.cpp)
+See [`deploy/README.md`](deploy/README.md): deploying Qwen3.8-27B on a Modal A100, the recommended
+`scripts/live_arc_run.py` flags for the ARC-AGI 2025 evaluation set, monitoring, cost and troubleshooting.
+
 ---
 
 ### 3. Launching the Applications

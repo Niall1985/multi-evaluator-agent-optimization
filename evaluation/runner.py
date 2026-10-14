@@ -1,10 +1,10 @@
 import ast
-import time
 import re
 import math
 from dataclasses import dataclass, field
 from typing import Dict, List, Any, Optional, Tuple, Callable
 from benchmarks.benchmark_tasks import BenchmarkTask
+from evaluation.sandbox import run_program
 
 
 @dataclass
@@ -163,12 +163,12 @@ class CodeExecutionRunner:
             report.pass_rate = 1.0
             return report
 
-        # Compile and execute code in isolated namespace
-        namespace: Dict[str, Any] = {}
-        try:
-            exec(code_str, namespace)
-        except Exception as e:
-            report.syntax_error = f"{type(e).__name__}: {str(e)}"
+        # Exec and call in a child process with a per-call time limit (evaluation.sandbox)
+        inputs = [c.get("args", ()) if isinstance(c.get("args", ()), tuple) else (c.get("args"),)
+                  for _, _, c in cases_to_run]
+        run = run_program(code_str, [(fn_entry,), ("solve",)], inputs)
+        if run.load_error or not run.functions:
+            report.syntax_error = run.load_error or f"Function '{fn_entry}' not found or not callable."
             for case_type, case_idx, case_dict in cases_to_run:
                 report.case_results.append(CaseExecutionResult(
                     case_index=case_idx,
@@ -180,28 +180,8 @@ class CodeExecutionRunner:
                 ))
             return report
 
-        solve_fn = namespace.get(fn_entry) or namespace.get("solve")
-        if not callable(solve_fn):
-            report.syntax_error = f"Function '{fn_entry}' not found or not callable."
-            for case_type, case_idx, case_dict in cases_to_run:
-                report.case_results.append(CaseExecutionResult(
-                    case_index=case_idx,
-                    case_type=case_type,
-                    args=case_dict.get("args", ()),
-                    expected=case_dict.get("expected"),
-                    passed=False,
-                    error=report.syntax_error,
-                ))
-            return report
-
-        start_time = time.perf_counter()
         passed_count = 0
-
-        for case_type, case_idx, case_dict in cases_to_run:
-            raw_args = case_dict.get("args", ())
-            if not isinstance(raw_args, tuple):
-                raw_args = (raw_args,)
-
+        for (case_type, case_idx, case_dict), raw_args, [(status, value)] in zip(cases_to_run, inputs, run.results):
             expected = case_dict.get("expected")
             expect_exception = case_dict.get("expect_exception", False)
 
@@ -213,27 +193,22 @@ class CodeExecutionRunner:
                 is_exception_expected=expect_exception,
             )
 
-            try:
-                actual = solve_fn(*raw_args)
-                case_res.actual = actual
-
-                if not expect_exception and cls._are_values_equal(actual, expected):
+            if status == "ok":
+                case_res.actual = value
+                if not expect_exception and cls._are_values_equal(value, expected):
                     case_res.passed = True
                     passed_count += 1
-                elif expect_exception:
-                    case_res.passed = False  # Exception was expected but not raised
-            except Exception as e:
-                case_res.exception_raised = f"{type(e).__name__}: {str(e)}"
-                if expect_exception:
+                # else: wrong answer, or an exception was expected but not raised
+            else:
+                case_res.exception_raised = value
+                # A timeout or a dead child is the harness stopping the call, never the expected exception
+                if expect_exception and not value.startswith(("TimeoutError: call exceeded", "ChildProcessError")):
                     case_res.passed = True
                     passed_count += 1
-                else:
-                    case_res.passed = False
 
             report.case_results.append(case_res)
 
-        elapsed_ms = (time.perf_counter() - start_time) * 1000.0
-        report.latency_ms = elapsed_ms
+        report.latency_ms = run.elapsed_ms
         report.passed_count = passed_count
         report.pass_rate = float(passed_count / report.total_count) if report.total_count > 0 else 0.0
 

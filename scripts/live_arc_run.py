@@ -20,6 +20,14 @@ at all - at default effort it burns a 1024-token budget on hidden reasoning and 
 qwen/qwen3.8-27b also accepts `--reasoning-effort none`, but its on-demand tier caps output at 1000
 tokens/min so it truncates mid-answer on ARC prompts; not usable there without a paid tier.
 
+Local / OpenAI-compatible server (llama.cpp `llama-server`, vLLM, Ollama) instead of Groq:
+
+    uv run python scripts/live_arc_run.py --base-url http://localhost:8080/v1 --model local --rpm 0 --tpm 0 --delay 0
+
+That uses core/openai_compat_client.py: `--rpm` cap + exponential backoff only (TPM and reasoning-effort
+handling are Groq-only). Thinking is off by default (--thinking), 16 tasks run at once (--concurrency) and every call may use
+8192 tokens (--max-tokens); deploy/modal_vllm.py serves Qwen3.8-27B on Modal with a matching batch size. OPENAI_BASE_URL / OPENAI_API_KEY in .env work too, as does LLM_PROVIDER=openai.
+
 Reads GROQ_API_KEY from .env (falls back to the deterministic mock if unset). Two CSVs are
 written (both git-ignored via *_results.csv), rewritten after every generation:
 
@@ -58,7 +66,7 @@ from benchmarks.arc_challenge import (  # noqa: E402
     score_arc_cases,
 )
 from controller import EvolutionController  # noqa: E402
-from core.groq_client import GroqLLMClient  # noqa: E402
+from core.llm import resolve_provider  # noqa: E402
 
 
 CHARS_PER_TOKEN = 3.5  # fallback only, if the tokenizer cannot be loaded (first use downloads it)
@@ -128,8 +136,11 @@ def install_rate_limiter(rpm: int, tpm: int) -> None:
     """Gates every live GroqLLMClient.generate() in this process (agent, mutator and judge share one client).
 
     Patched on the class because the gen-0 seed is evaluated inside EvolutionController.__init__, before
-    any instance is reachable. Mock calls are not throttled.
+    any instance is reachable. Mock calls are not throttled. Groq provider only: the OpenAI-compatible
+    client does its own RPM limiting.
     """
+    from core.groq_client import GroqLLMClient
+
     limiter = RateLimiter(rpm, tpm)
     original = GroqLLMClient.generate
 
@@ -181,13 +192,23 @@ def write_task_csv(path: str, records: list, metric_names: list, report_test: bo
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--generations", type=int, default=10)
-    parser.add_argument("--model", default="openai/gpt-oss-120b", help="Groq model id")
+    parser.add_argument("--model", default="openai/gpt-oss-120b",
+                        help="model id (Groq id, or the name the local server reports at /v1/models)")
+    parser.add_argument("--provider", choices=["groq", "openai"], default=None,
+                        help="default: LLM_PROVIDER env, else 'openai' when --base-url/OPENAI_BASE_URL is set, "
+                             "else 'groq'")
+    parser.add_argument("--base-url", default=None,
+                        help="OpenAI-compatible server, e.g. http://localhost:8080/v1 for llama.cpp llama-server "
+                             "(default: OPENAI_BASE_URL)")
+    parser.add_argument("--api-key", default=None,
+                        help="key for --base-url if the server was started with --api-key (default: OPENAI_API_KEY)")
     parser.add_argument("--reasoning-effort", default="low",
                         help="gpt-oss: low|medium|high; qwen also accepts none. '' = don't send. At the default "
                              "effort gpt-oss-120b spends ~1020 tokens of hidden reasoning on an ARC prompt and "
                              "returns EMPTY content within a 1024 budget")
-    parser.add_argument("--max-tokens", type=int, default=3000,
-                        help="floor on max_tokens for every call (agent knobs default to 1024). Does not count "
+    parser.add_argument("--max-tokens", type=int, default=None,
+                        help="floor on max_tokens for every call (agent knobs default to 1024; default: 8192 for "
+                             "the openai provider, 3000 for groq). Does not count "
                              "against TPM admission, but qwen's on-demand tier caps output at 1000/min")
     parser.add_argument("--rpm", type=int, default=30, help="max LLM calls per rolling minute (0 = no cap)")
     parser.add_argument("--tpm", type=int, default=8000,
@@ -196,10 +217,22 @@ def main() -> None:
     parser.add_argument("--strategy", default="full_adaptive",
                         choices=["full_adaptive", "no_pruning", "ucb1_bandit", "static_cascade", "single_metric"])
     parser.add_argument("--delay", type=float, default=1.5, help="minimum seconds between consecutive LLM calls")
+    parser.add_argument("--thinking", choices=["off", "on", "server"], default="off",
+                        help="openai provider: send chat_template_kwargs.enable_thinking (Qwen3 templates think by "
+                             "default and can spend all of max_tokens before any answer). 'server' = send nothing")
+    parser.add_argument("--thinking-budget", type=int, default=0,
+                        help="openai provider with --thinking on: max reasoning tokens per call (vLLM "
+                             "thinking_token_budget; the server needs --reasoning-config). 0 = no limit")
+    parser.add_argument("--concurrency", type=int, default=None,
+                        help="tasks in flight at once per run (default: 16 for the openai provider, 1 for groq). "
+                             "Match the server's batch size, e.g. vLLM --max-num-seqs")
     parser.add_argument("--archetype", default="General Balanced Assistant")
     parser.add_argument("--deep-threshold", type=float, default=0.65,
                         help="full_adaptive/static_cascade: core-preview score needed to run the deep tier "
                              "(arc_pass_at_2_test, arc_color_palette); 0.0 = always run it")
+    parser.add_argument("--held-out-smoothing", type=float, default=0.001,
+                        help="additive smoothing a of the held-out pass rate in fitness: (solved + a) / (n + 2a). "
+                             "The reported held-out score stays unsmoothed")
     parser.add_argument("--explore-prob", type=float, default=0.30,
                         help="full_adaptive/static_cascade: chance to run the deep tier anyway")
     parser.add_argument("--lambda-penalty", type=float, default=0.5,
@@ -207,17 +240,27 @@ def main() -> None:
     parser.add_argument("--csv", default="live_arc_results.csv", help="archive export (one row per candidate)")
     parser.add_argument("--task-csv", default="live_arc_task_results.csv",
                         help="per-task metrics, one row per (generation, task)")
+    parser.add_argument("--resume", action="store_true",
+                        help="continue a stopped run from --csv / --task-csv instead of evaluating a new seed; "
+                             "--generations then counts the new generations")
     parser.add_argument("--no-report-test", dest="report_test", action="store_false",
                         help="do not score held-out pairs out-of-band every generation")
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(message)s")
-    if args.rpm > 0 or args.tpm > 0:
+    provider = resolve_provider(args.provider, args.base_url)
+    if args.max_tokens is None:
+        args.max_tokens = 8192 if provider == "openai" else 3000
+    if provider == "groq" and (args.rpm > 0 or args.tpm > 0):
         install_rate_limiter(args.rpm, args.tpm)
 
     ctrl = EvolutionController(
         selected_task_id=ARC_BENCHMARK_ID,
         evaluator_pool_factory=build_arc_evaluator_pool,
+        provider=provider,
+        base_url=args.base_url,
+        api_key=args.api_key,
+        rpm=args.rpm if provider == "openai" else 0,
         model=args.model,
         inter_call_delay=args.delay,
         default_strategy=args.strategy,
@@ -225,24 +268,41 @@ def main() -> None:
         lambda_penalty=args.lambda_penalty,
         reasoning_effort=args.reasoning_effort or None,
         min_max_tokens=args.max_tokens,
+        enable_thinking={"on": True, "off": False}.get(args.thinking) if provider == "openai" else None,
+        thinking_budget=(args.thinking_budget or None) if provider == "openai" else None,
+        max_concurrency=args.concurrency or (16 if provider == "openai" else 1),
+        metric_smoothing={"arc_pass_at_2_test": args.held_out_smoothing},
+        evaluate_seed=not args.resume,
     )
     ctrl.csv_filepath = args.csv
+    if args.resume:
+        last = ctrl.restore_from_csv(args.csv, args.task_csv)
     # The seed (gen 0) always runs every evaluator, so setting these after construction loses nothing.
     ctrl.sampler.deep_tier_threshold = args.deep_threshold
     ctrl.sampler.exploration_prob = args.explore_prob
-    print("mock mode:", ctrl.llm_client.is_mock, "| model:", ctrl.llm_client.model,
+    print("provider:", provider, getattr(ctrl.llm_client, "base_url", "") or "",
+          "| mock mode:", ctrl.llm_client.is_mock, "| model:", ctrl.llm_client.model,
           f"| reasoning_effort: {args.reasoning_effort or 'default'} | max_tokens>={args.max_tokens}",
           f"| rpm cap: {args.rpm or 'none'} | tpm cap: {args.tpm or 'none'} | delay: {args.delay}s",
+          f"| concurrency: {ctrl.max_concurrency}" + (f" | thinking: {args.thinking}" + (f" (budget {args.thinking_budget})" if args.thinking_budget else "")
+                                                     if provider == "openai" else ""),
           f"| strategy: {args.strategy} deep_threshold={args.deep_threshold} explore={args.explore_prob} "
           f"lambda={args.lambda_penalty}",
           "| tasks:", len(ctrl.history_records[0]["task_metrics"]), flush=True)
 
     seed = ctrl.history_records[0]
-    if args.report_test:
-        report_held_out(ctrl, seed)
-    write_task_csv(args.task_csv, ctrl.history_records, ctrl.metric_names, args.report_test)
-    print(f"gen 0 seed  fitness={seed['fitness']:.4f} metrics={seed['metrics']}", flush=True)
-    print("   per task pass@2 test:", {k: v.get("arc_pass_at_2_test") for k, v in seed["task_metrics"].items()}, flush=True)
+    if args.resume:
+        for r in ctrl.history_records:
+            solved = sum(1 for v in r["held_out_reported"].values() if v >= 1.0)
+            print(f"restored gen {r['generation']} {r['mutation_type']:<22} fitness={r['fitness']:.4f} "
+                  f"held-out solved={solved}", flush=True)
+        print(f"resuming after gen {last}", flush=True)
+    else:
+        if args.report_test:
+            report_held_out(ctrl, seed)
+        write_task_csv(args.task_csv, ctrl.history_records, ctrl.metric_names, args.report_test)
+        print(f"gen 0 seed  fitness={seed['fitness']:.4f} metrics={seed['metrics']}", flush=True)
+        print("   per task pass@2 test:", {k: v.get("arc_pass_at_2_test") for k, v in seed["task_metrics"].items()}, flush=True)
 
     if quota_exhausted(ctrl):
         print("stopping: daily quota already exhausted during the seed generation", flush=True)

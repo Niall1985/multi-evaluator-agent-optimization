@@ -2,7 +2,7 @@
 
 from typing import Optional
 
-from core.groq_client import GroqLLMClient
+from core.llm import LLMClient
 from evaluation.metrics import LLMReasoningQualityEvaluator, LLMSafetyHallucinationEvaluator
 from evaluation.pool import EvaluatorPool
 
@@ -11,7 +11,7 @@ from .partial_evaluators import PARTIAL_ARC_EVALUATORS
 
 
 def build_arc_evaluator_pool(
-    llm_client: GroqLLMClient,
+    llm_client: LLMClient,
     include_partial: bool = True,
     include_llm_judges: bool = False,
 ) -> EvaluatorPool:

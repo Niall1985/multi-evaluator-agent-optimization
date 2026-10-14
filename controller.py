@@ -1,10 +1,11 @@
 import time
 import logging
+from concurrent.futures import ThreadPoolExecutor
 import numpy as np
 from typing import Dict, List, Any, Optional, Callable, Tuple
 from core.agent import Agent, HarnessKnobs, AGENT_ARCHETYPES
 from core.archive import PopulationArchive
-from core.groq_client import GroqLLMClient
+from core.llm import LLMClient, make_llm_client
 from core.mutator import PromptMutator
 from evaluation.pool import EvaluatorPool
 from optimization.bayesian_weights import BayesianWeightOptimizer
@@ -35,11 +36,20 @@ class EvolutionController:
         selected_task_id: Optional[str] = None,
         inter_call_delay: float = 1.5,
         is_mock: Optional[bool] = None,
-        evaluator_pool_factory: Optional[Callable[[GroqLLMClient], EvaluatorPool]] = None,
+        evaluator_pool_factory: Optional[Callable[[LLMClient], EvaluatorPool]] = None,
         reasoning_effort: Optional[str] = None,
         min_max_tokens: int = 0,
         acquisition_type: str = "gp_ucb",
         fanova_window: int = 3,
+        provider: Optional[str] = None,
+        base_url: Optional[str] = None,
+        rpm: int = 0,
+        llm_client: Optional[LLMClient] = None,
+        enable_thinking: Optional[bool] = None,
+        thinking_budget: Optional[int] = None,
+        max_concurrency: int = 1,
+        metric_smoothing: Optional[Dict[str, float]] = None,
+        evaluate_seed: bool = True,
     ):
         self.api_key = api_key
         self.model = model
@@ -53,15 +63,26 @@ class EvolutionController:
         # Spec §3.3's W: fANOVA is measured every W generations and prunes after W consecutive low windows
         self.fanova_window = max(1, fanova_window)
         self.csv_filepath = "optimization_results.csv"
+        # Tasks of one run (agent calls, then evaluators) in flight at once. 1 = sequential; raise it only for a
+        # server that batches requests (vLLM, llama.cpp with --parallel), since every task is one LLM call.
+        self.max_concurrency = max(1, max_concurrency)
+        # Additive (Laplace) smoothing of a pass-rate metric's mean across tasks: (sum + a) / (n + 2a), {name: a}
+        self.metric_smoothing: Dict[str, float] = dict(metric_smoothing or {})
 
-        # Core components
-        self.llm_client = GroqLLMClient(
-            api_key=api_key,
+        # Core components. The provider (Groq, or an OpenAI-compatible server such as llama.cpp) is chosen by
+        # core.llm.make_llm_client from `provider` / LLM_PROVIDER / base_url / OPENAI_BASE_URL.
+        self.llm_client = llm_client or make_llm_client(
+            provider,
             model=model,
-            inter_call_delay=inter_call_delay,
+            api_key=api_key,
+            base_url=base_url,
             is_mock=is_mock,
-            reasoning_effort=reasoning_effort,
+            inter_call_delay=inter_call_delay,
             min_max_tokens=min_max_tokens,
+            reasoning_effort=reasoning_effort,
+            rpm=rpm,
+            enable_thinking=enable_thinking,
+            thinking_budget=thinking_budget,
         )
         # Default: the 6 canonical mu evaluators. A factory swaps in a benchmark-specific suite
         # (e.g. benchmarks.arc_challenge.build_arc_evaluator_pool).
@@ -90,8 +111,9 @@ class EvolutionController:
         self.cumulative_naive_cost = 0.0
         self.history_records: List[Dict[str, Any]] = []
 
-        # Initialize seed population
-        self.initialize_seed(archetype_name=self.initial_archetype, task_id=self.selected_task_id)
+        # Initialize seed population. evaluate_seed=False leaves the archive empty for restore_from_csv.
+        if evaluate_seed:
+            self.initialize_seed(archetype_name=self.initial_archetype, task_id=self.selected_task_id)
 
     def reset(self, initial_archetype: Optional[str] = None, selected_task_id: Optional[str] = None):
         """Resets the controller state, archive, and optimizers."""
@@ -213,6 +235,109 @@ class EvolutionController:
         }
         self.history_records.append(seed_record)
 
+    def restore_from_csv(self, results_csv: str, task_csv: Optional[str] = None) -> int:
+        """Rebuilds the archive, history and search state from a stopped run's CSVs so run_generation continues
+        after its last completed generation. Returns that generation.
+
+        Restored: agents (prompt, knobs, metrics, fitness), per-task metrics (from `task_csv`), the parent/idea
+        trials, the idea study and the GP observations. Not restored: the programs themselves (the CSVs keep
+        only a preview) and the RNG state."""
+        import pandas as pd
+
+        df = pd.read_csv(results_csv).sort_values("generation")
+        tasks_df = pd.read_csv(task_csv) if task_csv else None
+        menu = [name for name, _ in self.mutator.get_available_strategies()]
+
+        def num(row, key, default=None):
+            value = row.get(key)
+            return default if value is None or pd.isna(value) else value
+
+        for _, row in df.iterrows():
+            row = row.to_dict()
+            gen = int(row["generation"])
+            parent_id = num(row, "parent_id")
+            parent = self.archive.agents.get(parent_id) if parent_id else None
+            metrics = {m: float(row[m]) for m in self.metric_names if num(row, m) is not None}
+            weights = {m: float(num(row, f"weight_{m}", 0.0)) for m in self.metric_names}
+            task_metrics: Dict[str, Dict[str, float]] = {}
+            held_out: Dict[str, float] = {}
+            if tasks_df is not None:
+                for _, t in tasks_df[tasks_df["generation"] == gen].iterrows():
+                    t = t.to_dict()
+                    task_metrics[t["task_id"]] = {m: float(t[m]) for m in self.metric_names if num(t, m) is not None}
+                    if num(t, "arc_pass_at_2_test_reported") is not None:
+                        held_out[t["task_id"]] = float(t["arc_pass_at_2_test_reported"])
+            agent = Agent(
+                id=row["agent_id"],
+                parent_id=parent_id,
+                generation=gen,
+                system_prompt=row["system_prompt"],
+                harness_knobs=HarnessKnobs(
+                    temperature=float(row["temperature"]),
+                    max_retries=int(row["max_retries"]),
+                    top_p=float(num(row, "top_p", 0.95)),
+                    max_tokens=int(num(row, "max_tokens", 1024)),
+                ),
+                metrics=metrics,
+                fitness=float(row["fitness"]),
+                cost_spent=float(num(row, "cost_spent", 0.0)),
+                active_evaluators=list(metrics),
+                mutation_type=row["mutation_type"],
+                mutation_description="restored from " + results_csv,
+                lineage_path=(parent.lineage_path if parent else []) + [row["agent_id"]],
+                task_id=num(row, "task_id"),
+                task_metrics=task_metrics,
+            )
+            delta_f = float(num(row, "delta_f", 0.0))
+            self.archive.add_agent(
+                agent,
+                generation_metadata={
+                    "strategy": row["strategy"],
+                    "delta_f": delta_f,
+                    "weights": weights,
+                    "naive_cost_spent": num(row, "naive_cost_spent", 0.0),
+                    "cost_saved_this_gen": num(row, "cost_saved_this_gen", 0.0),
+                    "cumulative_adaptive_cost": num(row, "cumulative_adaptive_cost", 0.0),
+                    "cumulative_naive_cost": num(row, "cumulative_naive_cost", 0.0),
+                    "task_id": agent.task_id,
+                    "solution_preview": num(row, "solution_preview", ""),
+                    "soft_probe": bool(num(row, "soft_probe", False)),
+                    "fanova_pruned_count": int(num(row, "fanova_pruned_count", 0)),
+                },
+            )
+            if gen > 0:
+                # The same updates run_generation makes after scoring a child
+                self.sampler.restore_trial(parent_id, agent.mutation_type, delta_f, menu)
+                if row["strategy"] in ["no_pruning", "full_adaptive"]:
+                    self.bayesian_optimizer.add_observation(
+                        weights=weights, delta_f=delta_f, knobs=agent.harness_knobs.to_dict()
+                    )
+                elif row["strategy"] == "ucb1_bandit":
+                    self.bandit.update(arm_name=agent.mutation_type, reward=delta_f)
+                if gen % self.fanova_window == 0:
+                    self._update_fanova()
+            self.history_records.append({
+                "generation": gen,
+                "child_id": agent.id,
+                "parent_id": parent_id or "Root",
+                "child_prompt": agent.system_prompt,
+                "strategy": row["strategy"],
+                "fitness": agent.fitness,
+                "delta_f": delta_f,
+                "cost_spent": agent.cost_spent,
+                "active_evaluators": agent.active_evaluators,
+                "weights": weights,
+                "metrics": metrics,
+                "task_id": agent.task_id,
+                "task_metrics": task_metrics,
+                "held_out_reported": held_out,
+                "mutation_type": agent.mutation_type,
+            })
+            self.current_generation = gen
+            self.cumulative_adaptive_cost = float(num(row, "cumulative_adaptive_cost", 0.0))
+            self.cumulative_naive_cost = float(num(row, "cumulative_naive_cost", 0.0))
+        return self.current_generation
+
     # ------------------------------------------------------------------ task resolution & multi-task runs
 
     def _resolve_tasks(self, task_param: Optional[str] = None) -> Tuple[str, List[BenchmarkTask]]:
@@ -228,12 +353,23 @@ class EvolutionController:
 
     def _run_agent_on_tasks(self, agent: Agent, tasks: List[BenchmarkTask]) -> Dict[str, Dict[str, Any]]:
         """Calls the agent LLM once per task. Returns {task_id: {"solution", "latency_ms"}}."""
-        run: Dict[str, Dict[str, Any]] = {}
-        for task in tasks:
+
+        def call(task: BenchmarkTask) -> Dict[str, Any]:
             start = time.time()
             solution = self._execute_agent_on_task(agent, task)
-            run[task.id] = {"solution": solution, "latency_ms": (time.time() - start) * 1000}
-        return run
+            return {"solution": solution, "latency_ms": (time.time() - start) * 1000}
+
+        return {task.id: r for task, r in zip(tasks, self._map_tasks(call, tasks))}
+
+    def _map_tasks(self, fn: Callable[[BenchmarkTask], Any], tasks: List[BenchmarkTask]) -> List[Any]:
+        """fn(task) for every task, results in task order, up to max_concurrency at once.
+
+        With concurrency > 1, latency_ms (mu_2) includes time queued behind other requests, so compare it only
+        between runs at the same concurrency."""
+        if self.max_concurrency <= 1 or len(tasks) <= 1:
+            return [fn(task) for task in tasks]
+        with ThreadPoolExecutor(max_workers=min(self.max_concurrency, len(tasks))) as pool:
+            return list(pool.map(fn, tasks))
 
     def _evaluate_run(
         self,
@@ -247,27 +383,30 @@ class EvolutionController:
         Returns (mean scores across tasks, costs summed across tasks, per-task scores).
         For ARC this makes `arc_pass_at_2_test` the fraction of the benchmark solved, i.e. the official score.
         """
-        per_task: Dict[str, Dict[str, float]] = {}
-        cost_totals: Dict[str, float] = {}
-        for task in tasks:
+        def evaluate(task: BenchmarkTask):
             r = run[task.id]
-            scores, costs, _ = self.evaluator_pool.evaluate_subset(
+            return self.evaluator_pool.evaluate_subset(
                 agent=agent,
                 task=self._task_to_dict(task),
                 agent_output=r["solution"],
                 active_subset=active_subset,
                 execution_context={"generation_latency_ms": r["latency_ms"]},
             )
+
+        per_task: Dict[str, Dict[str, float]] = {}
+        cost_totals: Dict[str, float] = {}
+        for task, (scores, costs, _) in zip(tasks, self._map_tasks(evaluate, tasks)):
             per_task[task.id] = scores
             for name, cost in zip([n for n in active_subset if n in scores], costs):
                 cost_totals[name] = cost_totals.get(name, 0.0) + cost
 
         n = max(1, len(tasks))
-        mean_scores = {
-            name: round(sum(per_task[t.id].get(name, 0.0) for t in tasks) / n, 4)
-            for name in active_subset
-            if any(name in per_task[t.id] for t in tasks)
-        }
+        mean_scores = {}
+        for name in active_subset:
+            if any(name in per_task[t.id] for t in tasks):
+                alpha = self.metric_smoothing.get(name, 0.0)
+                total = sum(per_task[t.id].get(name, 0.0) for t in tasks)
+                mean_scores[name] = round((total + alpha) / (n + 2 * alpha), 6 if alpha else 4)
         summed_costs = [cost_totals[name] for name in mean_scores]
         return mean_scores, summed_costs, per_task
 

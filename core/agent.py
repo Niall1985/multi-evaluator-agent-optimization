@@ -88,6 +88,19 @@ AGENT_ARCHETYPES: Dict[str, Dict[str, Any]] = {
         ),
         "harness_knobs": HarnessKnobs(temperature=0.3, max_retries=2, top_p=0.90, max_tokens=1024),
     },
+    # Without it, a model that reasons in prose (Qwen3.6 with thinking off) spends the whole token budget on
+    # analysis and never reaches the code block.
+    "ARC Code-First Solver": {
+        "id_suffix": "codefirst",
+        "description": "Answers with one Python program and keeps reasoning to brief code comments.",
+        "system_prompt": (
+            "You are an expert competitive problem solver.\n"
+            "- Output exactly one ```python block that defines solve(grid). No text outside the block.\n"
+            "- Put reasoning in short code comments.\n"
+            "- Find one rule that fits every example and works for any grid size."
+        ),
+        "harness_knobs": HarnessKnobs(temperature=0.5, max_retries=2, top_p=0.95, max_tokens=1024),
+    },
 }
 
 

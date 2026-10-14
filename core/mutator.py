@@ -2,7 +2,7 @@ import random
 import numpy as np
 from typing import Tuple, Optional, List
 from .agent import Agent, HarnessKnobs
-from .groq_client import GroqLLMClient
+from .llm import LLMClient
 
 MUTATION_STRATEGIES = [
     ("edge_case_awareness", "Instruct the agent to systematically identify and test corner cases before returning."),
@@ -11,13 +11,22 @@ MUTATION_STRATEGIES = [
     ("safety_adherence", "Instruct the agent to strictly follow parameter types, bounds, and security constraints."),
     ("algorithmic_efficiency", "Instruct the agent to prioritize lowest time and space asymptotic complexity."),
     ("robust_retry", "Instruct the agent to write defensive try-except blocks and explicit input validation."),
+    ("reduce_overthinking", "Instruct the agent to stop overthinking: when its reasoning starts looping with phrases like "
+     "'hmm', 'wait, but', 'actually', 'let me recheck' or 'let me reconsider', it must stop the loop, keep the "
+     "best-supported hypothesis and continue from there, and it must not re-verify a step it already checked."),
+    ("context_economy", "Instruct the agent to use what is already in its context: do not re-read or re-quote files, "
+     "examples or earlier output unless they were updated since it last read them."),
+    ("task_decomposition", "Instruct the agent to decompose the problem into small sub-tasks, solve and check them one "
+     "by one, and build the final solution from one small helper function per sub-task."),
+    ("hypothesis_first", "Instruct the agent to state one candidate rule in a single line, check it against every "
+     "example once, and only revise it when an example contradicts it."),
 ]
 
 
 class PromptMutator:
     """Generates prompt mutations and harness knob perturbations (theta_H) for candidate agents."""
 
-    def __init__(self, llm_client: GroqLLMClient):
+    def __init__(self, llm_client: LLMClient):
         self.llm_client = llm_client
 
     def get_available_strategies(self) -> List[Tuple[str, str]]:
@@ -45,6 +54,10 @@ class PromptMutator:
             f"Strategy Name: {strategy_name}\n"
             f"Optimization Goal: {strategy_goal}\n\n"
             "Task: Rewrite and upgrade the system prompt. Make it direct, authoritative, and structured. "
+            "Keep every output-format requirement of the parent prompt (for example, answering with one code "
+            "block). Keep it short: at most about 150 words. "
+            "Format: the first line is one role sentence; then one '- ' bulleted list with one rule per line. "
+            "Merge the new instruction into that list; do not add headings, sections or paragraphs. "
             "Output ONLY the improved system prompt text without commentary or quotes."
         )
 

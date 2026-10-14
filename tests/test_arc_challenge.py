@@ -13,7 +13,7 @@ from benchmarks.arc_challenge import (
     ARC_BENCHMARK_ID,
     ARC_BENCHMARK_NAME,
     ARC_TASKS,
-    DEFAULT_DATA_ROOT,
+    ARC_DATA_ROOT,
     PARTIAL_ARC_EVALUATORS,
     REAL_ARC_EVALUATORS,
     ArcColorPaletteEvaluator,
@@ -47,16 +47,16 @@ class TestArcChallengeBenchmark(unittest.TestCase):
 
     @staticmethod
     def _raw(split):
-        root = DEFAULT_DATA_ROOT
+        root = ARC_DATA_ROOT
         challenges = json.load(open(root / f"arc-agi_{split}_challenges.json"))
         solutions = json.load(open(root / f"arc-agi_{split}_solutions.json"))
         return challenges, solutions
 
     def test_bundled_split_files_load_with_correct_mapping(self):
         # Kaggle / OpenEvolve layout: arc-agi_{split}_challenges.json + arc-agi_{split}_solutions.json
-        self.assertEqual(available_splits(DEFAULT_DATA_ROOT), ["training", "evaluation"])
+        self.assertEqual(available_splits(ARC_DATA_ROOT), ["training", "evaluation"])
         raw = {}
-        for split in available_splits(DEFAULT_DATA_ROOT):
+        for split in available_splits(ARC_DATA_ROOT):
             challenges, solutions = self._raw(split)
             self.assertEqual(set(challenges), set(solutions))
             for tid, ch in challenges.items():

@@ -55,6 +55,26 @@ class JointSearchSampler:
             self.idea_study.tell(self._pending_idea_trial, float(delta_f))
             self._pending_idea_trial = None
 
+    def restore_trial(self, parent_id: str, idea: str, delta_f: float, menu: List[str]) -> None:
+        """Replays a finished generation's (parent, idea, Delta_F) into the trial list and the idea study."""
+        self.trials.append((parent_id, idea, float(delta_f)))
+        if idea not in menu:
+            return
+        self._ensure_idea_study()
+        self.idea_study.add_trial(optuna.trial.create_trial(
+            params={"idea": idea},
+            distributions={"idea": CategoricalDistribution(list(menu))},
+            value=float(delta_f),
+        ))
+
+    def _ensure_idea_study(self) -> None:
+        if self.idea_study is None:
+            optuna.logging.set_verbosity(optuna.logging.WARNING)
+            self.idea_study = optuna.create_study(
+                direction="maximize",
+                sampler=optuna.samplers.TPESampler(n_startup_trials=self.tpe_startup_trials),
+            )
+
     def _tpe_ready(self) -> bool:
         return len(self.trials) >= self.tpe_startup_trials
 
@@ -90,12 +110,7 @@ class JointSearchSampler:
         if not use_tpe:
             return random.choice(strategies)
         by_name = dict(strategies)
-        if self.idea_study is None:
-            optuna.logging.set_verbosity(optuna.logging.WARNING)
-            self.idea_study = optuna.create_study(
-                direction="maximize",
-                sampler=optuna.samplers.TPESampler(n_startup_trials=self.tpe_startup_trials),
-            )
+        self._ensure_idea_study()
         if self._pending_idea_trial is not None:
             # The previous generation died between ask and tell: close its trial rather than leave it running
             self.idea_study.tell(self._pending_idea_trial, state=optuna.trial.TrialState.FAIL)
