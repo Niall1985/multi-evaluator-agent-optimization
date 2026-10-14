@@ -68,9 +68,9 @@ GPU = f"{VARIANT['gpu']}:{N_GPUS}"
 CPU = 4
 MEMORY_MB = 16384
 
-# Seconds idle before the container stops. Must outlast the client work between generations (scoring 120
+# Idle time before the container stops. Must outlast the client work between generations (scoring 120
 # programs in the sandbox, the GP fit: ~2.5 min): at 150 s the container drained right as gen 2 started.
-SCALEDOWN_WINDOW = 600
+SCALEDOWN_WINDOW = 4 * MINUTES
 TARGET_INPUTS = 16  # 32 filled the KV cache with 6k-token answers and requests queued past the client timeout
 STARTUP_TIMEOUT = 30 * MINUTES
 

@@ -51,7 +51,7 @@ export OPENAI_API_KEY=wk-<id>.ws-<secret>
 
 ### Wake the server before a run
 
-The server scales to zero after 600 idle seconds, and while no container is up Modal answers **503**. A cold
+The server scales to zero after 4 idle minutes, and while no container is up Modal answers **503**. A cold
 start takes 2-3 minutes with cached weights (5-10 minutes the first time, which downloads ~21 GB of weights). The
 client's retries give up after about a minute, so wait for health first:
 
@@ -160,7 +160,7 @@ partial-credit signals that move first.
 | Throughput | 750-900 output tokens/s across 25-28 concurrent requests |
 | Seed generation, code-first, 120 tasks | ~15 min |
 | Later generations | 15-30+ min: mutated prompts can grow the answers again |
-| Cost | about $2.42/h (A100-40GB $2.10 + 4 CPU + 16 GiB RAM, Modal list prices); billed only while a container runs, plus 600 idle seconds |
+| Cost | about $2.42/h (A100-40GB $2.10 + 4 CPU + 16 GiB RAM, Modal list prices); billed only while a container runs, plus 4 idle minutes |
 
 A full 10-generation run is a few hours. Use `ARC_TASK_LIMIT` to size it, or `QUANT=fp8` on an A100-80GB for
 more KV-cache room (about $2.81/h).
@@ -168,7 +168,7 @@ more KV-cache room (about $2.81/h).
 ## 6. Stopping
 
 Kill the client by its PID (`pgrep -f scripts/live_arc_run.py`). Do not use a broad `pkill -f` pattern, which can
-also match the shell that runs it. The Modal container stops on its own 600 seconds after the last request.
+also match the shell that runs it. The Modal container stops on its own 4 minutes after the last request.
 `modal app stop qwen38-27b-vllm` stops it at once (it then needs a new `modal deploy`).
 
 To continue a stopped run, rerun the same command with `--resume` and `--generations` set to the number of
@@ -186,7 +186,7 @@ Revoke the proxy token when you are done: `modal workspace proxy-tokens list` fo
 | A burst of `InternalServerError (attempt 1)` right after `modal deploy` | The old container drains while the new one starts. The retries succeed; you can ignore it. |
 | `APITimeoutError` / `APIConnectionError` at attempt 2+ | Requests waited more than the client's 600 s timeout. The KV cache was full (98%) at 32-way concurrency with 6000-token answers, so requests queued. The defaults are now 16; if it recurs, lower `--concurrency` further, lower `--max-tokens`, or deploy `QUANT=fp8` on 80 GB. |
 | Bursts of `InternalServerError` mid-run, a second container in `modal container list`, then `503 no upstreams available` | Modal autoscaling. With `target_concurrency=16`, the 17th request scaled up a second A100, and the scale-down after it aborted in-flight requests. The deploy now runs one container (no `target_concurrency`) and drains for up to 10 minutes. |
-| 500s then `503 no upstreams available` right as a new generation starts | The container scaled down while the client was scoring the previous generation (~2.5 min with no requests). The scale-down window is now 600 s; it was 150 s. Continue the stopped run with `--resume` (section 6). |
+| 500s then `503 no upstreams available` right as a new generation starts | The container scaled down while the client was scoring the previous generation (~2.5 min with no requests). The scale-down window is now 4 minutes; it was 150 s. Continue the stopped run with `--resume` (section 6). |
 | `arc_runs_successfully` near 0 | Answers truncated before the code (`finish_reason=length`). Use the code-first archetype, a thinking budget, and enough `--max-tokens`. |
 | Run hangs forever, no new log lines | Was: a generated `solve()` with an infinite loop. Candidate code now runs in a subprocess with a 5 s per-call limit (`evaluation/sandbox.py`), so this should not recur. If it does, `py-spy dump` shows where. |
 | `We were unable to determine the version of Python` on deploy | The image needs `add_python="3.12"`, which `deploy/modal_vllm.py` already sets. |
