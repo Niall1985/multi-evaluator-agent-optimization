@@ -3,7 +3,7 @@ from typing import List, Dict, Tuple, Optional, Any
 import optuna
 from optuna.distributions import CategoricalDistribution
 from core.agent import Agent, HarnessKnobs
-from core.archive import PopulationArchive
+from core.archive import PopulationArchive, ProgramRecord, weighted_score
 from evaluation.pool import EvaluatorPool
 from .bayesian_weights import BayesianWeightOptimizer
 from .fanova import FunctionalANOVA
@@ -45,15 +45,16 @@ class JointSearchSampler:
         # The idea menu is fixed, so it is Optuna's TPESampler over one categorical, driven by ask-and-tell:
         # asked in sample_idea, told Delta_F in record_trial. Created on first use, when the menu is known.
         self.idea_study: Optional[optuna.Study] = None
-        self._pending_idea_trial: Optional[optuna.trial.Trial] = None
+        # Open asks by key: one per child, since program-archive mode asks for several children per generation
+        self._pending_idea_trials: Dict[str, optuna.trial.Trial] = {}
 
     # ------------------------------------------------------------------ discrete: parent and idea
 
-    def record_trial(self, parent_id: str, idea: str, delta_f: float) -> None:
+    def record_trial(self, parent_id: str, idea: str, delta_f: float, key: str = "default") -> None:
         self.trials.append((parent_id, idea, float(delta_f)))
-        if self._pending_idea_trial is not None:
-            self.idea_study.tell(self._pending_idea_trial, float(delta_f))
-            self._pending_idea_trial = None
+        pending = self._pending_idea_trials.pop(key, None)
+        if pending is not None:
+            self.idea_study.tell(pending, float(delta_f))
 
     def restore_trial(self, parent_id: str, idea: str, delta_f: float, menu: List[str]) -> None:
         """Replays a finished generation's (parent, idea, Delta_F) into the trial list and the idea study."""
@@ -104,20 +105,64 @@ class JointSearchSampler:
         candidates = random.sample(all_agents, k)
         return max(candidates, key=lambda a: a.fitness)
 
-    def sample_idea(self, strategies: List[Tuple[str, str]], use_tpe: bool = False) -> Tuple[str, str]:
+    def sample_idea(
+        self, strategies: List[Tuple[str, str]], use_tpe: bool = False, key: str = "default"
+    ) -> Tuple[str, str]:
         """Samples a mutation idea from the menu. With `use_tpe` it is Optuna's TPESampler (random for its
         first `tpe_startup_trials` trials); the trial stays open until record_trial tells it Delta_F."""
         if not use_tpe:
             return random.choice(strategies)
         by_name = dict(strategies)
         self._ensure_idea_study()
-        if self._pending_idea_trial is not None:
+        stale = self._pending_idea_trials.pop(key, None)
+        if stale is not None:
             # The previous generation died between ask and tell: close its trial rather than leave it running
-            self.idea_study.tell(self._pending_idea_trial, state=optuna.trial.TrialState.FAIL)
+            self.idea_study.tell(stale, state=optuna.trial.TrialState.FAIL)
         trial = self.idea_study.ask({"idea": CategoricalDistribution(list(by_name))})
-        self._pending_idea_trial = trial
+        self._pending_idea_trials[key] = trial
         chosen = trial.params["idea"]
         return chosen, by_name[chosen]
+
+    # ------------------------------------------------------------------ program-archive mode
+
+    # Floor on a prior weight, so a candidate with a zero archived score stays reachable
+    # (OpenEvolve's fitness-weighted island sampling uses the same 0.001 floor).
+    PRIOR_FLOOR = 0.001
+
+    def sample_weighted_parent(self, candidates: List[Agent]) -> Agent:
+        """TPE over `candidates` with their archived fitness as the prior p_i (tpe.categorical_tpe_choice):
+        before any trial this is fitness-proportional selection; past (parent, Delta_F) trials then move it."""
+        by_id = {a.id: a for a in candidates}
+        chosen = categorical_tpe_choice(
+            candidates=list(by_id),
+            observed=[t[0] for t in self.trials],
+            scores=[t[2] for t in self.trials],
+            prior=[max(a.fitness, 0.0) + self.PRIOR_FLOOR for a in by_id.values()],
+        )
+        return by_id[chosen]
+
+    def sample_program_parent(
+        self, archive: PopulationArchive, task_id: str, weights: Dict[str, float]
+    ) -> Optional[ProgramRecord]:
+        """Which archived program of `task_id` to repair, or None for a fresh attempt.
+
+        TPE over the task's MAP-Elites elites plus the FRESH choice, observed on that task's own
+        (parent, Delta_F) trials. Prior: a program's weighted score; FRESH gets the mean of those, so it is as
+        likely as an average elite until repairs start paying off (or failing)."""
+        elites = archive.task_elites(task_id)
+        if not elites:
+            return None
+        prior = [weighted_score(p.scores, weights) + self.PRIOR_FLOOR for p in elites]
+        candidates = [p.id for p in elites] + [archive.FRESH]
+        prior.append(sum(prior) / len(prior))
+        trials = archive.task_trials.get(task_id, [])
+        chosen = categorical_tpe_choice(
+            candidates=candidates,
+            observed=[t[0] for t in trials],
+            scores=[t[1] for t in trials],
+            prior=prior,
+        )
+        return None if chosen == archive.FRESH else archive.programs[chosen]
 
     # ------------------------------------------------------------------ continuous: w and theta_H
 

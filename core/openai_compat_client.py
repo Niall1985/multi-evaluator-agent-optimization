@@ -74,6 +74,11 @@ class OpenAICompatLLMClient:
         self.failed_calls = 0
         self.quota_exhausted_until: Optional[float] = None
         self.quota_exhausted_error: Optional[str] = None
+        # Token accounting across all calls, and the last call's usage per thread (generate() runs on several
+        # threads, so the caller reads its own call's numbers with last_call_info() right after generate()).
+        self.usage = {"calls": 0, "prompt_tokens": 0, "completion_tokens": 0, "reasoning_tokens": 0,
+                      "finish_length": 0}
+        self._local = threading.local()
 
         self._lock = threading.Lock()
         self._call_times: deque = deque()
@@ -111,6 +116,30 @@ class OpenAICompatLLMClient:
             body["thinking_token_budget"] = self.thinking_budget
         return body or None
 
+    @property
+    def total_tokens(self) -> int:
+        return self.usage["prompt_tokens"] + self.usage["completion_tokens"]
+
+    def last_call_info(self) -> dict:
+        """Usage and finish_reason of the last generate() on this thread ({} if it failed or none ran)."""
+        return dict(getattr(self._local, "info", {}) or {})
+
+    def _record_usage(self, response) -> None:
+        usage = getattr(response, "usage", None)
+        details = getattr(usage, "completion_tokens_details", None)
+        info = {
+            "prompt_tokens": int(getattr(usage, "prompt_tokens", 0) or 0),
+            "completion_tokens": int(getattr(usage, "completion_tokens", 0) or 0),
+            "reasoning_tokens": int(getattr(details, "reasoning_tokens", 0) or 0),
+            "finish_reason": response.choices[0].finish_reason,
+        }
+        self._local.info = info
+        with self._lock:
+            self.usage["calls"] += 1
+            for key in ("prompt_tokens", "completion_tokens", "reasoning_tokens"):
+                self.usage[key] += info[key]
+            self.usage["finish_length"] += int(info["finish_reason"] == "length")
+
     def generate(
         self,
         system_prompt: str,
@@ -120,6 +149,7 @@ class OpenAICompatLLMClient:
         max_tokens: int = 1024,
     ) -> str:
         last_error: Optional[Exception] = None
+        self._local.info = {}
         for attempt in range(self.max_retries + 1):
             self._wait_for_slot()
             try:
@@ -134,6 +164,7 @@ class OpenAICompatLLMClient:
                     max_tokens=max(max_tokens, self.min_max_tokens),
                     extra_body=self._extra_body(),
                 )
+                self._record_usage(response)
                 return response.choices[0].message.content or ""
             except (RateLimitError, InternalServerError, APIConnectionError) as e:
                 # APITimeoutError is a subclass of APIConnectionError

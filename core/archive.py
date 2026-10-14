@@ -1,6 +1,38 @@
+import json
+import uuid
+from dataclasses import asdict, dataclass, field
 import pandas as pd
-from typing import List, Dict, Optional, Any
-from .agent import Agent
+from typing import List, Dict, Optional, Any, Tuple
+from .agent import Agent, HarnessKnobs
+
+
+@dataclass
+class ProgramRecord:
+    """One program an agent wrote for one task, scored by the evaluator pool on that task alone.
+
+    `cell` is its MAP-Elites cell in the task's grid (see PopulationArchive.add_program); `feedback` is the
+    benchmark's description of where it fails, which the next repair prompt shows the model.
+    """
+    task_id: str
+    solution: str
+    agent_id: str
+    generation: int
+    scores: Dict[str, float]
+    cell: str
+    solved: bool = False
+    feedback: str = ""
+    parent_program_id: Optional[str] = None
+    usage: Dict[str, Any] = field(default_factory=dict)  # the call's tokens and finish_reason, when the client reports them
+    id: str = field(default_factory=lambda: f"prog_{uuid.uuid4().hex[:10]}")
+
+
+def weighted_score(scores: Dict[str, float], weights: Dict[str, float]) -> float:
+    """sum_j w_j mu_j over the evaluators that scored this program, renormalised over their weights so a
+    program scored on a pruned subset is not ranked below one scored on the full pool."""
+    total_w = sum(weights.get(k, 0.0) for k in scores)
+    if total_w <= 0:
+        return sum(scores.values()) / len(scores) if scores else 0.0
+    return sum(weights.get(k, 0.0) * v for k, v in scores.items()) / total_w
 
 
 class PopulationArchive:
@@ -13,6 +45,17 @@ class PopulationArchive:
         # Gap 5: Per-Evaluator Dimension Elite Archive
         # Maps metric_name -> {"agent_id": str, "score": float, "generation": int, "prompt": str, "mutation": str}
         self.dimension_elites: Dict[str, Dict[str, Any]] = {}
+
+        # Program view (program-archive mode, one archive for the whole run): every program written for a
+        # task, a MAP-Elites grid per task keeping the best program per cell, and the islands agents live on.
+        self.programs: Dict[str, ProgramRecord] = {}
+        self.task_cells: Dict[str, Dict[str, str]] = {}  # task_id -> {cell: program_id}
+        self.solved_tasks: Dict[str, str] = {}  # task_id -> id of the first program passing every demonstration
+        self.islands: List[List[str]] = []  # island -> agent ids (an agent can sit on several after migration)
+        # (parent program id or FRESH, Delta_F) per task: the observations the per-task TPE splits
+        self.task_trials: Dict[str, List[Tuple[str, float]]] = {}
+
+    FRESH = "fresh"  # program-parent choice meaning "write the task from scratch"
 
     def add_agent(self, agent: Agent, generation_metadata: Optional[Dict[str, Any]] = None):
         """Adds an evaluated agent to the population archive and updates per-dimension elites."""
@@ -59,6 +102,126 @@ class PopulationArchive:
             record.update(generation_metadata)
 
         self.generation_records.append(record)
+
+    # ------------------------------------------------------------------ program view
+
+    def add_program(self, program: ProgramRecord, weights: Dict[str, float]) -> bool:
+        """Adds a program and lets it compete for its MAP-Elites cell; returns True if it took the cell.
+
+        A cell is (which demonstration pairs the program passes, how many outputs have the right shape), so a
+        program right on pair 1 and one right on pair 3 are both kept even when one scores lower overall
+        (OpenEvolve's per-island MAP-Elites grid, here per task). Within a cell the higher weighted score wins.
+        """
+        self.programs[program.id] = program
+        if program.solved and program.task_id not in self.solved_tasks:
+            self.solved_tasks[program.task_id] = program.id
+        cells = self.task_cells.setdefault(program.task_id, {})
+        incumbent = self.programs.get(cells.get(program.cell, ""))
+        if incumbent is None or weighted_score(program.scores, weights) > weighted_score(incumbent.scores, weights):
+            cells[program.cell] = program.id
+            return True
+        return False
+
+    def task_elites(self, task_id: str) -> List[ProgramRecord]:
+        """The programs currently holding a cell of the task's grid."""
+        return [self.programs[pid] for pid in self.task_cells.get(task_id, {}).values()]
+
+    def task_best(self, task_id: str, weights: Dict[str, float]) -> Optional[ProgramRecord]:
+        elites = self.task_elites(task_id)
+        return max(elites, key=lambda p: (p.solved, weighted_score(p.scores, weights)), default=None)
+
+    def task_best_score(self, task_id: str, weights: Dict[str, float]) -> float:
+        best = self.task_best(task_id, weights)
+        return weighted_score(best.scores, weights) if best else 0.0
+
+    def is_solved(self, task_id: str) -> bool:
+        return task_id in self.solved_tasks
+
+    def record_task_trial(self, task_id: str, parent_choice: str, delta_f: float) -> None:
+        self.task_trials.setdefault(task_id, []).append((parent_choice, float(delta_f)))
+
+    def task_pareto_agents(self, weights: Dict[str, float]) -> List[str]:
+        """Agents holding the best program on at least one task: kept as parents even with a lower mean."""
+        owners = set()
+        for task_id in self.task_cells:
+            best = self.task_best(task_id, weights)
+            if best is not None:
+                owners.add(best.agent_id)
+        return sorted(owners)
+
+    # ------------------------------------------------------------------ islands
+
+    def init_islands(self, n: int, seed_agent_ids: List[str]) -> None:
+        self.islands = [list(seed_agent_ids) for _ in range(max(1, n))]
+
+    def add_to_island(self, island: int, agent_id: str) -> None:
+        if agent_id not in self.islands[island]:
+            self.islands[island].append(agent_id)
+
+    def island_agents(self, island: int) -> List[Agent]:
+        return [self.agents[a] for a in self.islands[island] if a in self.agents]
+
+    def migrate_ring(self) -> List[Tuple[int, int, str]]:
+        """Copies each island's best agent to its two ring neighbours (OpenEvolve's default topology).
+        Returns the (from, to, agent_id) moves made."""
+        n = len(self.islands)
+        if n < 2:
+            return []
+        bests = []
+        for i in range(n):
+            members = self.island_agents(i)
+            bests.append(max(members, key=lambda a: a.fitness).id if members else None)
+        moves = []
+        for i, agent_id in enumerate(bests):
+            if agent_id is None:
+                continue
+            for j in {(i + 1) % n, (i - 1) % n} - {i}:
+                if agent_id not in self.islands[j]:
+                    self.islands[j].append(agent_id)
+                    moves.append((i, j, agent_id))
+        return moves
+
+    # ------------------------------------------------------------------ JSON checkpoint
+
+    def to_state(self) -> Dict[str, Any]:
+        agents = {}
+        for a in self.agents.values():
+            d = a.to_dict()
+            d.pop("task_solutions", None)  # programs live in self.programs
+            agents[a.id] = d
+        return {
+            "agents": agents,
+            "best_agent_id": self.best_agent_id,
+            "generation_records": self.generation_records,
+            "dimension_elites": self.dimension_elites,
+            "programs": {pid: asdict(p) for pid, p in self.programs.items()},
+            "task_cells": self.task_cells,
+            "solved_tasks": self.solved_tasks,
+            "islands": self.islands,
+            "task_trials": self.task_trials,
+        }
+
+    @classmethod
+    def from_state(cls, state: Dict[str, Any]) -> "PopulationArchive":
+        archive = cls()
+        for agent_id, d in state["agents"].items():
+            d = dict(d)
+            d["harness_knobs"] = HarnessKnobs.from_dict(d["harness_knobs"])
+            archive.agents[agent_id] = Agent(**d)
+        archive.best_agent_id = state.get("best_agent_id")
+        archive.generation_records = list(state.get("generation_records", []))
+        archive.dimension_elites = dict(state.get("dimension_elites", {}))
+        archive.programs = {pid: ProgramRecord(**p) for pid, p in state.get("programs", {}).items()}
+        archive.task_cells = {t: dict(c) for t, c in state.get("task_cells", {}).items()}
+        archive.solved_tasks = dict(state.get("solved_tasks", {}))
+        archive.islands = [list(i) for i in state.get("islands", [])]
+        archive.task_trials = {t: [tuple(x) for x in v] for t, v in state.get("task_trials", {}).items()}
+        return archive
+
+    def save_json(self, path: str) -> str:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(self.to_state(), f)
+        return path
 
     def get_best_agent(self) -> Optional[Agent]:
         """Returns the current highest-fitness agent in the archive."""

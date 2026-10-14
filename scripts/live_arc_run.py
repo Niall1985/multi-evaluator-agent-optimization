@@ -243,6 +243,24 @@ def main() -> None:
     parser.add_argument("--resume", action="store_true",
                         help="continue a stopped run from --csv / --task-csv instead of evaluating a new seed; "
                              "--generations then counts the new generations")
+    parser.add_argument("--mode", choices=["agent", "archive"], default="agent",
+                        help="agent: one child per generation scored on every task (the original loop). archive: "
+                             "program-archive mode - every program kept per task, one child per island working on "
+                             "UCB1-picked tasks, repairing archived programs; selection uses demonstration pairs only")
+    parser.add_argument("--islands", type=int, default=4, help="archive mode: islands = children per generation")
+    parser.add_argument("--tasks-per-child", type=int, default=30,
+                        help="archive mode: tasks each child works on per generation (calls/gen = islands x this + "
+                             "islands mutation calls)")
+    parser.add_argument("--max-temperature", type=float, default=0.7,
+                        help="archive mode: upper bound of the temperature the GP proposes")
+    parser.add_argument("--state", default="live_arc_state.json",
+                        help="archive mode: JSON checkpoint (every program, selector state), rewritten each "
+                             "generation; with --resume the run continues from it")
+    parser.add_argument("--program-csv", default="live_arc_program_results.csv",
+                        help="archive mode: one row per program written")
+    parser.add_argument("--token-cap", type=int, default=0,
+                        help="stop after the generation in which prompt + completion tokens pass this (0 = no cap; "
+                             "openai provider only)")
     parser.add_argument("--no-report-test", dest="report_test", action="store_false",
                         help="do not score held-out pairs out-of-band every generation")
     args = parser.parse_args()
@@ -253,6 +271,8 @@ def main() -> None:
         args.max_tokens = 8192 if provider == "openai" else 3000
     if provider == "groq" and (args.rpm > 0 or args.tpm > 0):
         install_rate_limiter(args.rpm, args.tpm)
+    if args.mode == "archive":
+        return run_archive(args, provider)
 
     ctrl = EvolutionController(
         selected_task_id=ARC_BENCHMARK_ID,
@@ -338,6 +358,146 @@ def main() -> None:
         traceback.print_exc()
         exit_code = 1
     return finish(ctrl, args, exit_code)
+
+
+def run_archive(args, provider: str) -> None:
+    """Program-archive mode (EvolutionController evolution_mode="program_archive").
+
+    The evaluator pool leaves out arc_pass_at_2_test, so no prompt and no selection decision sees a held-out
+    output; that is what makes evolving on the evaluation split itself legitimate."""
+    ctrl = EvolutionController(
+        selected_task_id=ARC_BENCHMARK_ID,
+        evaluator_pool_factory=lambda llm: build_arc_evaluator_pool(llm, include_held_out=False),
+        provider=provider,
+        base_url=args.base_url,
+        api_key=args.api_key,
+        rpm=args.rpm if provider == "openai" else 0,
+        model=args.model,
+        inter_call_delay=args.delay,
+        initial_archetype=args.archetype,
+        lambda_penalty=args.lambda_penalty,
+        reasoning_effort=args.reasoning_effort or None,
+        min_max_tokens=args.max_tokens,
+        enable_thinking={"on": True, "off": False}.get(args.thinking) if provider == "openai" else None,
+        thinking_budget=(args.thinking_budget or None) if provider == "openai" else None,
+        max_concurrency=args.concurrency or (16 if provider == "openai" else 1),
+        evaluate_seed=not args.resume,
+        evolution_mode="program_archive",
+        n_islands=args.islands,
+        tasks_per_child=args.tasks_per_child,
+        knob_bounds={"temperature": (0.1, args.max_temperature), "top_p": (0.6, 1.0)},
+    )
+    ctrl.csv_filepath = args.csv
+    ctrl.sampler.deep_tier_threshold = args.deep_threshold
+    ctrl.sampler.exploration_prob = args.explore_prob
+    client = ctrl.llm_client
+    print("provider:", provider, getattr(client, "base_url", "") or "", "| mock mode:", client.is_mock,
+          "| model:", client.model, f"| max_tokens>={args.max_tokens} | concurrency: {ctrl.max_concurrency}",
+          f"| thinking: {args.thinking}" + (f" (budget {args.thinking_budget})" if args.thinking_budget else ""),
+          f"| mode: archive islands={args.islands} tasks/child={args.tasks_per_child} "
+          f"T<={args.max_temperature} | evaluators: {ctrl.metric_names}", flush=True)
+
+    if args.resume:
+        last = ctrl.load_state(args.state)
+        print(f"resumed from {args.state} after gen {last}: {len(ctrl.archive.programs)} programs, "
+              f"{len(ctrl.archive.solved_tasks)} tasks solved on their demonstrations", flush=True)
+    else:
+        seed = ctrl.history_records[0]
+        print(f"gen 0 seed  fitness={seed['fitness']:.4f} solved(demos)={len(ctrl.archive.solved_tasks)}"
+              f"/{len(seed['task_metrics'])} metrics={seed['metrics']} {token_line(client)}", flush=True)
+        ctrl.save_state(args.state)
+        write_program_csv(args.program_csv, ctrl)
+        if args.report_test:
+            report_archive_held_out(ctrl, args.task_csv)
+
+    exit_code = 0
+    try:
+        for _ in range(args.generations):
+            r = ctrl.run_generation()
+            if r.get("all_solved"):
+                print("every task is solved on its demonstrations; stopping", flush=True)
+                break
+            w = {k.replace("arc_", ""): round(v, 2) for k, v in r["weights"].items()}
+            print(f"gen {r['generation']} calls={r['calls']} repairs={r['repairs']} "
+                  f"new solves={r['new_solves']} solved(demos)={r['solved_tasks']} open={r['open_tasks']} "
+                  f"T={r['knobs']['temperature']:.2f} top_p={r['knobs']['top_p']:.2f} w={w} "
+                  f"{token_line(client)}" + (f" migrations={len(r['migrations'])}" if r["migrations"] else ""),
+                  flush=True)
+            for c in r["children"]:
+                print(f"   island {c['island']} {c['mutation_type']:<22} parent={c['parent_id']} "
+                      f"fitness={c['fitness']:.4f} dF={c['delta_f']:+.4f} tasks={len(c['task_deltas'])} "
+                      f"repairs={c['repairs']} new solves={len(c['new_solves'])}", flush=True)
+            ctrl.save_state(args.state)
+            write_program_csv(args.program_csv, ctrl)
+            if args.report_test:
+                report_archive_held_out(ctrl, args.task_csv)
+            if client.failed_calls:
+                print(f"   failed live calls so far: {client.failed_calls} (each scored as an empty answer)", flush=True)
+            if args.token_cap and getattr(client, "total_tokens", 0) >= args.token_cap:
+                print(f"stopping: token cap {args.token_cap} reached", flush=True)
+                break
+    except KeyboardInterrupt:
+        print("\ninterrupted - the checkpoint holds every completed generation", flush=True)
+        exit_code = 130
+    except Exception as e:  # noqa: BLE001
+        print(f"\nrun aborted by {type(e).__name__}: {e}", flush=True)
+        traceback.print_exc()
+        exit_code = 1
+    try:
+        ctrl.archive.export_to_csv(args.csv)
+        write_program_csv(args.program_csv, ctrl)
+    except Exception as e:  # noqa: BLE001
+        print(f"could not write CSVs: {e}", flush=True)
+    print(f"\nsolved on demonstrations: {sorted(ctrl.archive.solved_tasks)}", flush=True)
+    print(f"state: {args.state}  programs: {args.program_csv}  agents: {args.csv}  "
+          f"generations completed: {ctrl.current_generation}", flush=True)
+    sys.exit(exit_code)
+
+
+def report_archive_held_out(ctrl: EvolutionController, path: str) -> None:
+    """Prints and writes the official score: held-out pass@2 with the two attempts picked from the archive on
+    the demonstration pairs. Reporting only - the held-out outputs never feed back into the run."""
+    results = ctrl.archive_held_out()
+    solved = sorted(t for t, r in results.items() if r["solved"])
+    total = sum(r["score"] for r in results.values())
+    print(f"   held-out pass@2 (archive picks): {total:g}/{len(results)} = {total / max(1, len(results)):.4f} "
+          f"solved={solved}", flush=True)
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=["generation", "task_id", "held_out_pass_at_2", "solved_demos",
+                                          "attempt_1_program", "attempt_2_program"])
+        w.writeheader()
+        for tid, r in results.items():
+            ids = r["attempt_program_ids"] + ["", ""]
+            w.writerow({"generation": ctrl.current_generation, "task_id": tid, "held_out_pass_at_2": r["score"],
+                        "solved_demos": int(ctrl.archive.is_solved(tid)), "attempt_1_program": ids[0],
+                        "attempt_2_program": ids[1]})
+
+
+def token_line(client) -> str:
+    usage = getattr(client, "usage", None)
+    if not usage:
+        return ""
+    return (f"| tokens: {usage['prompt_tokens'] + usage['completion_tokens']:,} "
+            f"(completion {usage['completion_tokens']:,}, calls {usage['calls']}, "
+            f"hit max_tokens {usage['finish_length']})")
+
+
+def write_program_csv(path: str, ctrl: EvolutionController) -> None:
+    """One row per program: where it sits in its task's grid, its scores, and its call's token usage."""
+    fields = ["generation", "program_id", "task_id", "agent_id", "parent_program_id", "cell", "is_elite", "solved",
+              *ctrl.metric_names, "prompt_tokens", "completion_tokens", "reasoning_tokens", "finish_reason"]
+    elites = {pid for cells in ctrl.archive.task_cells.values() for pid in cells.values()}
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=fields)
+        w.writeheader()
+        for p in ctrl.archive.programs.values():
+            row = {"generation": p.generation, "program_id": p.id, "task_id": p.task_id, "agent_id": p.agent_id,
+                   "parent_program_id": p.parent_program_id or "", "cell": p.cell, "is_elite": int(p.id in elites),
+                   "solved": int(p.solved)}
+            row.update({k: p.scores[k] for k in ctrl.metric_names if k in p.scores})
+            row.update({k: p.usage.get(k, "") for k in
+                        ("prompt_tokens", "completion_tokens", "reasoning_tokens", "finish_reason")})
+            w.writerow(row)
 
 
 def quota_exhausted(ctrl: EvolutionController) -> bool:

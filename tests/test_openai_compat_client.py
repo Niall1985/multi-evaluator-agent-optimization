@@ -71,6 +71,25 @@ class TestOpenAICompatClient(unittest.TestCase):
         finally:
             server.close()
 
+    def test_records_usage_and_finish_reason(self):
+        truncated = _completion("partial")
+        truncated["choices"][0]["finish_reason"] = "length"
+        truncated["usage"] = {"prompt_tokens": 100, "completion_tokens": 50, "total_tokens": 150,
+                              "completion_tokens_details": {"reasoning_tokens": 40}}
+        server = StubServer([(200, truncated), (400, {"error": "bad"})])
+        try:
+            client = self.client(server)
+            client.generate("sys", "user")
+            self.assertEqual(client.last_call_info(), {"prompt_tokens": 100, "completion_tokens": 50,
+                                                       "reasoning_tokens": 40, "finish_reason": "length"})
+            self.assertEqual(client.total_tokens, 150)
+            self.assertEqual(client.usage["finish_length"], 1)
+            client.generate("sys", "user")  # failed call: no stale info from the previous one
+            self.assertEqual(client.last_call_info(), {})
+            self.assertEqual(client.usage["calls"], 1)
+        finally:
+            server.close()
+
     def test_thinking_switch_sent_only_when_set(self):
         server = StubServer([])
         try:

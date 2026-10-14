@@ -79,6 +79,36 @@ uv run python scripts/live_arc_run.py \
 
 For a first try add `ARC_TASK_LIMIT=16 ... --generations 1`: it exercises the whole path in a few minutes.
 
+### Program-archive mode (`--mode archive`)
+
+Evolves on the evaluation split itself. Programs are selected on the demonstration pairs only, and the
+held-out outputs are used only to score the final picks. The archive keeps every program written for each
+task (one MAP-Elites grid per task). Each generation:
+
+- **Children:** one child agent per island. TPE picks its parent agent, using archived fitness as the
+  prior, and Optuna TPE picks the mutation idea.
+- **Tasks:** UCB1 picks the unsolved tasks, and each child gets `--tasks-per-child` of them.
+- **Calls:** one call per task. For each one, TPE either picks an archived program to repair (the prompt
+  shows its failing demonstrations plus other archived programs) or starts the task fresh.
+- **Retiring:** a task is dropped once a program passes all its demonstrations.
+- **Reported score:** held-out pass@2, where the two attempts are the two best archived programs that give
+  different answers.
+
+```bash
+uv run python scripts/live_arc_run.py --mode archive \
+    --model Qwen/Qwen3.8-27B --archetype "ARC Code-First Solver" \
+    --thinking on --thinking-budget 4096 --max-tokens 8192 --concurrency 16 \
+    --rpm 0 --tpm 0 --delay 0 --generations 20 \
+    --islands 4 --tasks-per-child 30 --max-temperature 0.7 --token-cap 25000000 \
+    --state live_arc_state.json --program-csv live_arc_program_results.csv \
+    --csv live_arc_agent_results.csv --task-csv live_arc_heldout_results.csv > live_arc_archive.log 2>&1 &
+```
+
+- **Run size:** the seed generation makes one call per task. After that, each generation makes
+  islands × tasks-per-child calls plus one mutation call per island.
+- **Checkpoint:** `--state` is rewritten after every generation. Add `--resume` to continue from it.
+- **Program CSV:** one row per program, with its cell, scores, tokens and `finish_reason`.
+
 ### Why these flags
 
 | Flag | Why |
