@@ -76,6 +76,7 @@ SCALEDOWN_WINDOW = 4 * MINUTES
 # 32 filled the 16-bit KV cache with 6k-token answers and queued requests past the client timeout. The FP8 KV
 # cache (~385k tokens on A100-40GB) has twice the room, so 22 fits with headroom for a few 30x30 prompts.
 TARGET_INPUTS = 22
+CUDAGRAPH_CAPTURE_SIZES = sorted({1, 2, 4, *range(8, TARGET_INPUTS + 1, 8), TARGET_INPUTS})
 STARTUP_TIMEOUT = 30 * MINUTES
 
 serving_image = (
@@ -109,6 +110,10 @@ SERVER_ARGS = {
     "--max-num-seqs": str(TARGET_INPUTS),
     "--max-num-batched-tokens": "16384",  # chunked-prefill budget: a 15k-token 30x30 ARC prompt prefills in ~1 step
     "--max-cudagraph-capture-size": str(TARGET_INPUTS),  # recipe: lower this on Mamba cache errors
+    # Default capture sizes are [1, 2, 4] + range(8, max + 1, 8), so with 22 the largest graph was 16 and a full
+    # 22-request batch decoded eagerly: ~365 tok/s against ~650 at 16 (2026-10-15). List the batch size itself.
+    # https://docs.vllm.ai/en/latest/api/vllm/config/compilation/ (cudagraph_capture_sizes)
+    "--compilation-config": json.dumps({"cudagraph_capture_sizes": CUDAGRAPH_CAPTURE_SIZES}),
     "--reasoning-parser": "qwen3",
     # Lets requests cap thinking with `thinking_token_budget`; at the cap the server emits this end string. It is
     # Qwen's own early-stopping text (qwen.readthedocs.io quickstart, "thinking budget"), closed with the
