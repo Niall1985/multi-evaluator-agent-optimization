@@ -9,6 +9,7 @@ OpenEvolve's arc_benchmark evaluator (`combined_score`, `runs_successfully`,
 the evaluators in `evaluators.py` (official metrics) and `partial_evaluators.py`.
 """
 
+import numbers
 from typing import Any, Dict, List, Optional, Sequence
 
 from evaluation.runner import CodeExecutionRunner
@@ -18,6 +19,16 @@ from benchmarks.benchmark_tasks import BenchmarkTask
 Grid = List[List[int]]
 
 ATTEMPT_FUNCTIONS = ("transform_grid_attempt_1", "transform_grid_attempt_2")
+
+
+def _cell(v: Any) -> Optional[int]:
+    """An integer cell value (numpy ints and integral floats like 1.0 included); None for anything else.
+    `int(v)` alone accepted "3" and truncated 2.9 to 2, matches the official exact comparison would reject."""
+    if isinstance(v, numbers.Integral):
+        return int(v)
+    if isinstance(v, float) and v.is_integer():
+        return int(v)
+    return None
 
 
 def to_grid(value: Any) -> Optional[Grid]:
@@ -30,10 +41,10 @@ def to_grid(value: Any) -> Optional[Grid]:
     for row in value:
         if not isinstance(row, (list, tuple)) or not row:
             return None
-        try:
-            rows.append([int(v) for v in row])
-        except (TypeError, ValueError):
+        cells = [_cell(v) for v in row]
+        if any(c is None for c in cells):
             return None
+        rows.append(cells)
     if len({len(r) for r in rows}) != 1:
         return None
     return rows

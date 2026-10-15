@@ -6,7 +6,10 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from benchmarks.arc_challenge.scoring import score_arc_cases
+import numpy as np
+
+from benchmarks.arc_challenge.scoring import score_arc_cases, to_grid
+from evaluation import sandbox
 from evaluation.runner import CodeExecutionRunner
 from evaluation.sandbox import run_program
 
@@ -45,6 +48,25 @@ class TestSandbox(unittest.TestCase):
         self.assertEqual(m["runs_successfully"], 1.0)
         self.assertEqual(m["combined_score"], 0.5)
         self.assertTrue(any("TimeoutError" in e for e in m["errors"]))
+
+    def test_repeat_runs_are_cached_and_copies_are_independent(self):
+        sandbox.clear_cache()
+        code = "def solve(grid):\n    return [row[::-1] for row in grid]\n"
+        first = run_program(code, [("solve",)], [([[1, 2]],)])
+        first.results[0][0][1][0][0] = 99  # a caller mutating its copy must not change the cache
+        t0 = time.monotonic()
+        again = run_program(code, [("solve",)], [([[1, 2]],)])
+        self.assertLess(time.monotonic() - t0, 0.05)  # no child process
+        self.assertEqual(again.results, [[("ok", [[2, 1]])]])
+        self.assertEqual(sandbox.cache_stats, {"hits": 1, "misses": 1})
+        run_program(code, [("solve",)], [([[3, 4]],)])  # other inputs: a new run
+        self.assertEqual(sandbox.cache_stats["misses"], 2)
+
+    def test_arc_cells_must_be_integers(self):
+        self.assertEqual(to_grid([[1.0, 2]]), [[1, 2]])
+        self.assertEqual(to_grid(np.array([[3, 4]])), [[3, 4]])
+        self.assertIsNone(to_grid([["3", 4]]))
+        self.assertIsNone(to_grid([[2.9, 4]]))
 
     def test_runner_reports_timeout_as_failed_case(self):
         report = CodeExecutionRunner.run_task(
