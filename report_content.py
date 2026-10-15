@@ -1475,18 +1475,30 @@ def chapter6(b):
              "Best-so-far fitness against generation for each condition, averaged over "
              "all tasks and repetitions, with standard error bands")
     b.body(
-        f"Figure {b.last_fig()} shows best-so-far fitness against generation. Two features "
-        f"are visible. First, "
-        "the conditions separate immediately and the ordering is stable thereafter, which reflects "
-        "the fact that the dominant term in the fitness is the cost penalty and the weighting "
-        "scheme, both of which are determined by the condition rather than discovered during the "
-        "run. Second, the curves flatten after the first few generations. The horizon is the likely "
-        "explanation: six generations is a short budget in which to separate conditions whose "
-        "differences are structural, and the per-generation improvement a prompt mutation can "
-        "deliver is small beside the fixed gap the weighting scheme imposes at generation one. The "
-        "ARC experiment of Section 6.8, which runs a comparable number of generations but with many "
-        "more candidates per generation, shows continuing improvement over the same horizon, which "
-        "suggests the limit here is the number of candidates rather than the number of generations."
+        f"Figure {b.last_fig()} shows best-so-far fitness against generation, and it divides the "
+        "conditions into two groups that behave quite differently. The single-metric and static "
+        "cascade conditions rise steeply to generation one and then stop: both are flat over the "
+        "final two generations, having found their best candidate early and not improved on it. "
+        "The bandit condition behaves almost identically, gaining less than three thousandths over "
+        "the same interval. For these three the search has effectively finished well before the "
+        "budget does."
+    )
+    b.body(
+        "The two conditions that evaluate the most dimensions behave in the opposite way. "
+        "Exhaustive evaluation gains a further 0.053 over the last two generations and the full "
+        "adaptive condition a further 0.030, which are the largest late gains of any condition; "
+        "both are still climbing when the budget runs out. This is the clearest evidence in the "
+        "chapter that six generations is too short a horizon, and it is the reason the flat "
+        "comparisons of Section 6.5 should be read as a statement about this budget rather than "
+        "about the conditions in general."
+    )
+    b.body(
+        "The ordering is also not stable, which bears on how the final numbers should be read. At "
+        "generation one the full adaptive condition is last of the five; by generation six it has "
+        "climbed to third, and exhaustive evaluation has overtaken the single-metric condition that "
+        "led from the start. A ranking taken at the horizon is therefore a snapshot of an ordering "
+        "still in motion, not a settled result, and the two conditions that finish strongest are "
+        "precisely those whose curves have not yet turned over."
     )
 
     b.section_heading("6.4", "Cost of evaluation")

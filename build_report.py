@@ -447,7 +447,26 @@ class ReportBuilder:
         return f"{self.chapter}.{self._tab_n + 1}"
 
     def save(self, path: str):
+        self._mark_fields_dirty()
         self.doc.save(path)
+
+    def _mark_fields_dirty(self):
+        """Ask Word to recalculate every field when the document is opened.
+
+        The table of contents, the lists of figures and tables and the page
+        numbers are all field codes, and a field carries no text until something
+        paginates the document. finalize_docx.py does that through Word's COM
+        interface, but it needs a working Word installation; setting
+        w:updateFields makes the document repair itself on first open instead,
+        so the build does not depend on one.
+        """
+        from docx.oxml.ns import qn
+
+        settings = self.doc.settings.element
+        for existing in settings.findall(qn("w:updateFields")):
+            settings.remove(existing)
+        el = settings.makeelement(qn("w:updateFields"), {qn("w:val"): "true"})
+        settings.append(el)
 
 
 # --------------------------------------------------------------------------
