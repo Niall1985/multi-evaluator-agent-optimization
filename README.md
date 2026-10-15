@@ -150,10 +150,10 @@ The framework supports multi-objective evolution and benchmarking across **2 dis
 
 ## 🖥️ Modern React Studio UI Architecture
 
-The React frontend (`frontend/`) features an uncluttered, responsive **Tabbed Navigation Bar** organizing the studio into 8 dedicated views:
+The React frontend (`frontend/`) features an uncluttered, responsive **Tabbed Navigation Bar** organizing the studio into 9 dedicated views:
 
 ```
-[ Overview ] [ Gap 1: Pruning ] [ Gap 2: Bayesian w ] [ Gap 3: Cost Fitness ] [ Gap 4: fANOVA ] [ Gap 5: Archive ] [ Gap 6: Joint Search ] [ Test Suite Execution ]
+[ Overview ] [ Batch Benchmark (100 Runs) ] [ Gap 1: Pruning ] [ Gap 2: Bayesian w ] [ Gap 3: Cost Fitness ] [ Gap 4: fANOVA ] [ Gap 5: Archive ] [ Gap 6: Joint Search ] [ Test Suite Execution ]
 ```
 
 ### 1. `Overview Tab`
@@ -161,36 +161,45 @@ The React frontend (`frontend/`) features an uncluttered, responsive **Tabbed Na
 * Interactive 2D **Pareto Frontier Scatter Plot** (Fitness vs. Evaluator Cost in \$).
 * Evolved Active System Prompt card with live metric badges.
 
-### 2. `Gap 1: Pruning Tab`
+### 2. `Batch Benchmark Studio (100 Runs / 300 Agents)` ⭐ NEW
+* **One-Click Execution**: "Run Everything (100 Runs)" button triggering the complete multi-domain experimental matrix:
+  * **Coding Agent**: 5 Ablations × 6 Seed Archetypes × 2 BO Acquisitions = 60 Runs (180 Agents)
+  * **Sentiment Agent**: 5 Ablations × 4 Seed Archetypes × 2 BO Acquisitions = 40 Runs (120 Agents)
+  * **Total**: 100 Runs × 3 Generations = **300 Agents Generated**
+* **Live Progress Bar**: Real-time run counter (`Run X/100`), agent generation progress (`Gen Y/300`), domain indicator, and percentage completion.
+* **Instant CSV Export**: Direct one-click download of `comprehensive_multi_domain_benchmark_results.csv` with columns arranged by metric importance.
+* **Interactive Results Table**: Filter by Domain (`Coding` / `Sentiment`), Ablation Condition (all 5), BO Acquisition (`GP-UCB` / `EI`), and search by Task or Agent ID.
+
+### 3. `Gap 1: Pruning Tab`
 * Interactive 2-Tier Cascade architecture flow diagram.
 * Preview Score Gate trigger visualization ($\tau = 0.65$).
 * Evaluator Activation Vector Table: generation-by-generation audit of active vs. skipped metrics ($x_E \in \{0, 1\}^6$) and per-step dollar savings.
 
-### 3. `Gap 2: Bayesian w Tab`
+### 4. `Gap 2: Bayesian w Tab`
 * Live **1D Gaussian Process Posterior Slice**: Interactive chart showing posterior mean $\mu(w)$, $\pm 1.96\sigma$ uncertainty envelope, and Expected Improvement (EI) curve for any selected metric weight.
 * Probability Simplex ($\Delta^5$) active distribution grid.
 
-### 4. `Gap 3: Cost Fitness Tab`
+### 5. `Gap 3: Cost Fitness Tab`
 * Cost-penalized fitness equation breakdown ($F = \sum w_j \mu_j - \lambda \sum c_j$).
 * Cumulative Cost Trajectory chart: Adaptive System (\$ spent) vs. Naive Baseline (\$ spent).
 * Evaluator Unit Costing Matrix ($c_1 \dots c_6$).
 
-### 5. `Gap 4: fANOVA Tab`
+### 6. `Gap 4: fANOVA Tab`
 * Interactive **Sobol First-Order Sensitivity Index ($S_j$) Bar Chart**.
 * Total Surrogate Variance $V(f)$ counter.
 * Redundant Evaluators Badge list & automatic pruning status.
 
-### 6. `Gap 5: Archive Tab`
+### 7. `Gap 5: Archive Tab`
 * **6 Dimension Elite Cards** (one per evaluator) displaying peak historical score, generation found, mutation type, and elite prompt.
 * Live **Silent Regression Alert Monitor** with regression magnitude and affected metric warnings.
 * $\epsilon$-Probing audit log tracker.
 
-### 7. `Gap 6: Joint Search Tab`
+### 8. `Gap 6: Joint Search Tab`
 * Discrete **UCB1 Mutation Bandit Arm Distribution** bar chart.
 * Continuous Simplex Weight Trajectory ($w_1 \dots w_6$) stacked area chart across all generations.
 * Continuous harness knob evolution (temperature, top-p, retries).
 
-### 8. `Test Suite Execution Tab`
+### 9. `Test Suite Execution Tab`
 * **Generation Pill Selector**: Inspect candidate execution for any generation (Gen 0, Gen 1, Gen 2...).
 * **Pass Rate Status**: Overall test pass rate percentage badge.
 * **Generated Code / Model Invocation Sandbox**: Full, syntax-highlighted code output (Python algorithms for Coding agent; neural model invocation for Sentiment agent) with a one-click copy button.
@@ -306,13 +315,13 @@ python analyze_results.py
 
 ## 🧪 Unit & Integration Test Suite
 
-All 17 unit and integration tests verify the end-to-end functionality of all 6 research gaps across both Coding and Sentiment domains:
+All 18 unit and integration tests verify the end-to-end functionality of all 6 research gaps and multi-domain benchmarking:
 ```powershell
 python -m unittest tests.test_pipeline
 ```
 ```
 ----------------------------------------------------------------------
-Ran 17 tests in ~3s
+Ran 18 tests
 
 OK
 ```
@@ -323,11 +332,19 @@ Covering:
 - **Gap 4**: Functional ANOVA (fANOVA) surrogate variance decomposition and Sobol index calculation ($S_j = V_j / V_{\text{total}}$).
 - **Gap 5**: Per-evaluator Dimension Elite archive, $\epsilon$-probing audit mechanisms, and silent regression detection ($\Delta > 0.25$).
 - **Agent Domains**: Python code synthesis sandbox execution and neural NLP `SentiToolKit` (`SentiAnalyzer`) integration with fallback handling.
+- **Batch Benchmark Harness**: Complete 100-run / 300-agent experimental sweep verification and prioritized schema validation.
 
 ---
 
-## 📄 Benchmark Schema & CSV Telemetry
-Every generation cycle automatically appends detailed execution records to `optimization_results.csv` following this exact 32-column schema:
-```
-generation, agent_id, parent_id, fitness, cost_spent, mutation_type, temperature, max_retries, active_evaluators_count, mu_1_correctness, mu_2_latency, mu_3_conciseness, mu_4_reasoning, mu_5_edge_cases, mu_6_safety, strategy, naive_cost_spent, cumulative_adaptive_cost, cumulative_naive_cost, task_id, system_prompt, top_p, max_tokens, delta_f, cost_saved_this_gen, solution_preview, weight_mu_1_correctness, weight_mu_2_latency, weight_mu_3_conciseness, weight_mu_4_reasoning, weight_mu_5_edge_cases, weight_mu_6_safety
-```
+## 📄 Comprehensive Benchmark Schema (Prioritized Column Order)
+
+The full experimental matrix (60 Coding runs + 40 Sentiment runs = 100 runs × 3 generations = 300 agents) exports directly to `comprehensive_multi_domain_benchmark_results.csv` with columns strictly ordered by metric importance:
+
+1. **Core Identification**: `run_id`, `agent_domain`, `ablation_strategy`, `seed_archetype`, `bo_acquisition`, `generation`, `agent_id`, `parent_id`, `task_id`, `task_name`
+2. **Primary Performance & Verification (Rank 1)**: `fitness`, `testcases_passed`, `testcases_total`, `testcases_pass_rate_pct`, `mu_1_functional_correctness`
+3. **Pruning Status & Economics (Rank 2)**: `pruning_status`, `is_deep_tier_pruned`, `active_evaluators_count`, `active_evaluators_list`, `adaptive_cost_spent`, `total_cost_without_pruning`, `net_savings_dollars`, `net_savings_pct`
+4. **Evaluator Unit Costs for Generation (Rank 3)**: `cost_mu1_correctness`, `cost_mu2_latency`, `cost_mu3_conciseness`, `cost_mu4_reasoning`, `cost_mu5_edge_cases`, `cost_mu6_safety`
+5. **fANOVA Sensitivity Scores (Rank 4)**: `fanova_total_variance`, `fanova_S1_correctness`, `fanova_S2_latency`, `fanova_S3_conciseness`, `fanova_S4_reasoning`, `fanova_S5_edge_cases`, `fanova_S6_safety`, `fanova_redundant_pruned_metrics`
+6. **Secondary Evaluator Dimensions (Rank 5)**: `mu_2_latency`, `mu_3_conciseness`, `mu_4_reasoning`, `mu_5_edge_cases`, `mu_6_safety`
+7. **Dynamic Simplex Weights (Rank 6)**: `weight_mu1_correctness`, `weight_mu2_latency`, `weight_mu3_conciseness`, `weight_mu4_reasoning`, `weight_mu5_edge_cases`, `weight_mu6_safety`
+8. **Optimization Knobs & Metadata (Rank 7)**: `delta_f`, `mutation_type`, `harness_temperature`, `harness_top_p`, `harness_max_retries`, `cumulative_adaptive_cost`, `cumulative_naive_cost`, `cumulative_net_savings`, `solution_preview`, `system_prompt`

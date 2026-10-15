@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Play, FastForward, RotateCcw, Sliders, CheckCircle2, Code, Smile } from 'lucide-react';
+import { Play, FastForward, RotateCcw, Sliders, CheckCircle2, Code, Smile, Database } from 'lucide-react';
 
 const DOMAIN_OPTIONS = [
   {
@@ -35,6 +35,7 @@ export default function ControlPanel({
   onRunStep,
   onReset,
   isRunning,
+  onNavigateToBenchmark,
 }) {
   const [batchSize, setBatchSize] = useState(5);
 
@@ -210,6 +211,14 @@ export default function ControlPanel({
           >
             <FastForward className="w-3.5 h-3.5" />
             <span>Run {batchSize} Generations</span>
+          </button>
+
+          <button
+            onClick={onNavigateToBenchmark}
+            className="flex items-center space-x-2 px-4 py-2 rounded-lg bg-gradient-to-r from-teal-600/90 to-indigo-600/90 hover:from-teal-500 hover:to-indigo-500 border border-teal-500/30 text-white text-xs font-bold shadow-lg shadow-teal-950/40 transition active:scale-95"
+          >
+            <Database className="w-3.5 h-3.5 text-teal-300" />
+            <span>Generate Results for Everything (100 Runs)</span>
           </button>
 
           <div className="flex items-center space-x-1.5 bg-slate-950 border border-slate-800 rounded-lg px-2 py-1">

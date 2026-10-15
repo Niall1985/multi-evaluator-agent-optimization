@@ -52,6 +52,22 @@ def get_cached_senti_toolkit():
                 pass
         except BaseException:
             _CACHED_SENTI_TOOLKIT = FallbackSentiToolKit()
+            try:
+                import sys, types
+                if "SentiAnalyzer.Main_tensor_model" not in sys.modules:
+                    mod = types.ModuleType("SentiAnalyzer.Main_tensor_model")
+                    mod.SentiToolKit = lambda *a, **kw: _CACHED_SENTI_TOOLKIT
+                    sys.modules["SentiAnalyzer.Main_tensor_model"] = mod
+                else:
+                    sys.modules["SentiAnalyzer.Main_tensor_model"].SentiToolKit = lambda *a, **kw: _CACHED_SENTI_TOOLKIT
+
+                if "SentiAnalyzer" not in sys.modules:
+                    pkg = types.ModuleType("SentiAnalyzer")
+                    pkg.__path__ = []
+                    pkg.Main_tensor_model = sys.modules["SentiAnalyzer.Main_tensor_model"]
+                    sys.modules["SentiAnalyzer"] = pkg
+            except Exception:
+                pass
     return _CACHED_SENTI_TOOLKIT
 
 

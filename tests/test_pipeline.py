@@ -421,7 +421,34 @@ class TestMultiObjectiveAgentOptimization(unittest.TestCase):
         self.assertGreater(record["test_suite"]["total_count"], 0)
         self.assertGreater(record["test_suite"]["passed_count"], 0)
 
+    def test_batch_benchmark_sweep_harness(self):
+        """Tests the full multi-domain benchmark sweep manager and prioritized CSV schema."""
+        from benchmark_sweep import BenchmarkSweepManager, PRIORITIZED_COLUMNS
+        import pandas as pd
+
+        # Verify prioritized columns contain all required keys
+        required_keys = [
+            "run_id", "agent_domain", "ablation_strategy", "seed_archetype", "bo_acquisition",
+            "generation", "fitness", "testcases_passed", "testcases_total", "testcases_pass_rate_pct",
+            "pruning_status", "adaptive_cost_spent", "total_cost_without_pruning", "net_savings_dollars",
+            "cost_mu1_correctness", "cost_mu6_safety", "fanova_total_variance", "fanova_S1_correctness",
+        ]
+        for key in required_keys:
+            self.assertIn(key, PRIORITIZED_COLUMNS)
+
+        csv_path = "comprehensive_multi_domain_benchmark_results.csv"
+        self.assertTrue(os.path.exists(csv_path), f"Expected CSV file {csv_path} to exist.")
+
+        df = pd.read_csv(csv_path)
+        self.assertEqual(len(df), 300)
+        self.assertEqual(len(set(df["run_id"])), 100)
+        self.assertEqual(set(df["agent_domain"]), {"coding", "sentiment"})
+        self.assertEqual(len(df[df["agent_domain"] == "coding"]), 180)
+        self.assertEqual(len(df[df["agent_domain"] == "sentiment"]), 120)
+        self.assertEqual(list(df.columns), PRIORITIZED_COLUMNS)
+
 
 if __name__ == "__main__":
     unittest.main()
+
 

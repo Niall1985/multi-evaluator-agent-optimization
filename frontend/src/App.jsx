@@ -12,6 +12,7 @@ import Gap4FanovaTab from './components/tabs/Gap4FanovaTab';
 import Gap5ArchiveTab from './components/tabs/Gap5ArchiveTab';
 import Gap6JointTab from './components/tabs/Gap6JointTab';
 import TestSuiteTab from './components/tabs/TestSuiteTab';
+import BatchBenchmarkTab from './components/tabs/BatchBenchmarkTab';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('overview');
@@ -188,6 +189,7 @@ export default function App() {
           onRunStep={handleRunStep}
           onReset={handleReset}
           isRunning={isRunning}
+          onNavigateToBenchmark={() => setActiveTab('batch_benchmark')}
         />
 
         {/* Multi-Tab Navigation Bar */}
@@ -203,6 +205,10 @@ export default function App() {
               historyRecords={historyRecords}
               onSwitchTab={setActiveTab}
             />
+          )}
+
+          {activeTab === 'batch_benchmark' && (
+            <BatchBenchmarkTab />
           )}
 
           {activeTab === 'gap1' && (

@@ -1,9 +1,10 @@
 import React from 'react';
-import { LayoutDashboard, Scissors, SlidersHorizontal, DollarSign, Cpu, Archive, GitFork, CheckSquare } from 'lucide-react';
+import { LayoutDashboard, Scissors, SlidersHorizontal, DollarSign, Cpu, Archive, GitFork, CheckSquare, Database } from 'lucide-react';
 
 export default function NavigationTabs({ activeTab, setActiveTab }) {
   const tabs = [
     { id: 'overview', label: 'Overview', icon: LayoutDashboard, tag: 'Studio' },
+    { id: 'batch_benchmark', label: 'Batch Benchmark (100 Runs)', icon: Database, tag: '300 Agents' },
     { id: 'gap1', label: 'Gap 1: Pruning', icon: Scissors, tag: '2-Tier' },
     { id: 'gap2', label: 'Gap 2: Bayesian w', icon: SlidersHorizontal, tag: 'Simplex' },
     { id: 'gap3', label: 'Gap 3: Cost Fitness', icon: DollarSign, tag: '-λ·c' },

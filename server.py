@@ -233,6 +233,78 @@ def reset_controller(req: ResetRequest):
     }
 
 
+from fastapi.responses import FileResponse
+from benchmark_sweep import SWEEP_MANAGER, PRIORITIZED_COLUMNS
+
+
+@app.post("/api/batch_benchmark/start")
+def start_batch_benchmark():
+    """Starts the complete 100-run / 300-agent multi-domain benchmark sweep in the background."""
+    started = SWEEP_MANAGER.start_sweep_async(is_mock=True)
+    return {
+        "success": started,
+        "message": "Benchmark sweep started" if started else "Sweep is already running",
+        "status": SWEEP_MANAGER.get_status(),
+    }
+
+
+@app.get("/api/batch_benchmark/status")
+def get_batch_benchmark_status():
+    """Returns the live progress, KPIs, and preview records for the benchmark sweep."""
+    return SWEEP_MANAGER.get_status()
+
+
+@app.get("/api/batch_benchmark/results")
+def get_batch_benchmark_results():
+    """Returns all evolved benchmark records and prioritized column definitions."""
+    return {
+        "records": SWEEP_MANAGER.records,
+        "total": len(SWEEP_MANAGER.records),
+        "seed_records": SWEEP_MANAGER.seed_records,
+        "total_seeds": len(SWEEP_MANAGER.seed_records),
+        "comparison_records": SWEEP_MANAGER.comparison_records,
+        "total_comparisons": len(SWEEP_MANAGER.comparison_records),
+        "columns": PRIORITIZED_COLUMNS,
+        "summary": SWEEP_MANAGER.summary_stats,
+    }
+
+
+@app.get("/api/batch_benchmark/download")
+def download_batch_benchmark_csv():
+    """Serves the generated comprehensive evolved agents CSV for direct download."""
+    if not os.path.exists(SWEEP_MANAGER.output_csv):
+        raise HTTPException(status_code=404, detail="Benchmark CSV has not been generated yet.")
+    return FileResponse(
+        path=SWEEP_MANAGER.output_csv,
+        filename="comprehensive_multi_domain_benchmark_results.csv",
+        media_type="text/csv",
+    )
+
+
+@app.get("/api/batch_benchmark/download_seeds")
+def download_seed_agents_csv():
+    """Serves the generated seed agents (Gen 0) CSV for direct download."""
+    if not os.path.exists(SWEEP_MANAGER.seed_csv):
+        raise HTTPException(status_code=404, detail="Seed agents CSV has not been generated yet.")
+    return FileResponse(
+        path=SWEEP_MANAGER.seed_csv,
+        filename="seed_agents_benchmark_results.csv",
+        media_type="text/csv",
+    )
+
+
+@app.get("/api/batch_benchmark/download_excel")
+def download_batch_benchmark_excel():
+    """Serves the multi-sheet Excel workbook containing Evolved, Seed, and Comparison sheets."""
+    if not os.path.exists(SWEEP_MANAGER.excel_path):
+        raise HTTPException(status_code=404, detail="Benchmark Excel workbook has not been generated yet.")
+    return FileResponse(
+        path=SWEEP_MANAGER.excel_path,
+        filename="multi_domain_benchmark_results_all_sheets.xlsx",
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+
 # Mount built frontend static files if present
 frontend_dist = os.path.join(os.path.dirname(__file__), "frontend", "dist")
 if os.path.exists(frontend_dist):
