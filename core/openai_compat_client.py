@@ -54,6 +54,7 @@ class OpenAICompatLLMClient:
         thinking_budget: Optional[int] = None,
         stream: bool = True,
         stream_read_timeout: float = 120.0,
+        retry_window: float = 0.0,
     ):
         self.base_url = base_url
         self.model = model
@@ -61,6 +62,10 @@ class OpenAICompatLLMClient:
         self.rpm = rpm  # 0 = no cap
         self.inter_call_delay = inter_call_delay
         self.max_retries = max_retries
+        # Retryable failures (5xx, 503 "no upstreams", dropped connections) keep being retried, past max_retries,
+        # until this many seconds have passed since the first attempt. Modal replaces a GPU container now and then
+        # (two drains on 2026-10-15); the new one needs ~3-5 min to load, far longer than max_retries of backoff.
+        self.retry_window = retry_window
         self.backoff_base = backoff_base
         self.backoff_max = backoff_max
         self.min_max_tokens = min_max_tokens
@@ -180,7 +185,10 @@ class OpenAICompatLLMClient:
     ) -> str:
         last_error: Optional[Exception] = None
         self._local.info = {}
-        for attempt in range(self.max_retries + 1):
+        started = time.monotonic()
+        attempt = -1
+        while True:
+            attempt += 1
             self._wait_for_slot()
             try:
                 request = dict(
@@ -203,9 +211,9 @@ class OpenAICompatLLMClient:
                 # APITimeoutError is a subclass of APIConnectionError. A stall or a dropped connection while a stream
                 # is being read surfaces as an httpx error (ReadTimeout, RemoteProtocolError), not an SDK one.
                 last_error = e
-                if attempt == self.max_retries:
+                if attempt >= self.max_retries and time.monotonic() - started >= self.retry_window:
                     break
-                delay = self._backoff(attempt, e)
+                delay = self._backoff(min(attempt, 10), e)
                 logger.warning(f"{type(e).__name__} from {self.base_url} (attempt {attempt + 1}); retrying in {delay:.1f}s")
                 time.sleep(delay)
             except APIStatusError as e:

@@ -215,6 +215,17 @@ class TestOpenAICompatClient(unittest.TestCase):
         finally:
             server.close()
 
+    def test_retry_window_outlasts_max_retries(self):
+        unavailable = (503, {"error": "no upstreams available"})
+        server = StubServer([unavailable] * 6 + [(200, _completion("new container"))])
+        try:
+            c = self.client(server, max_retries=1, retry_window=5.0)
+            self.assertEqual(c.generate("s", "u"), "new container")  # 7 attempts, past max_retries=1
+            self.assertEqual(len(server.requests), 7)
+            self.assertEqual(c.failed_calls, 0)
+        finally:
+            server.close()
+
     def test_rpm_cap_blocks_until_window_frees(self):
         c = OpenAICompatLLMClient(base_url="http://127.0.0.1:9/v1", rpm=2)
         clock = [1000.0]

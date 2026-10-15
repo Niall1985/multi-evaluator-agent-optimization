@@ -17,6 +17,9 @@ from dotenv import load_dotenv
 load_dotenv()
 
 PROVIDERS = ("groq", "openai")
+# How long an OpenAI-compatible call keeps retrying 5xx / connection errors: outlasts a Modal container
+# replacement (cold start ~3-5 min), so a call waits for the new container instead of returning empty.
+OPENAI_RETRY_WINDOW_SEC = 480.0
 
 
 @runtime_checkable
@@ -84,6 +87,7 @@ def make_llm_client(
             min_max_tokens=min_max_tokens,
             enable_thinking=enable_thinking,
             thinking_budget=thinking_budget,
+            retry_window=OPENAI_RETRY_WINDOW_SEC,
         )
 
     from core.groq_client import GroqLLMClient
