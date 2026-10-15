@@ -69,7 +69,7 @@ ARC_DATA_ROOT=data/arc-prize-2025 ARC_TASK_FILE=evaluation PYTHONUNBUFFERED=1 \
 uv run python scripts/live_arc_run.py \
     --model Qwen/Qwen3.8-27B \
     --archetype "ARC Code-First Solver" \
-    --thinking on --thinking-budget 4096 --max-tokens 8192 \
+    --thinking on --thinking-budget 4096 --max-tokens 10000 \
     --concurrency 16 \
     --rpm 0 --tpm 0 --delay 0 \
     --generations 10 \
@@ -97,7 +97,7 @@ task (one MAP-Elites grid per task). Each generation:
 ```bash
 uv run python scripts/live_arc_run.py --mode archive \
     --model Qwen/Qwen3.8-27B --archetype "ARC Code-First Solver" \
-    --thinking on --thinking-budget 4096 --max-tokens 8192 --concurrency 16 \
+    --thinking on --thinking-budget 4096 --max-tokens 10000 --concurrency 16 \
     --rpm 0 --tpm 0 --delay 0 --generations 20 \
     --islands 4 --tasks-per-child 30 --max-temperature 0.7 --token-cap 25000000 \
     --state live_arc_state.json --program-csv live_arc_program_results.csv \
@@ -114,8 +114,8 @@ uv run python scripts/live_arc_run.py --mode archive \
 | Flag | Why |
 |---|---|
 | `--archetype "ARC Code-First Solver"` | Seed prompt that asks for one ```` ```python ```` block and keeps reasoning in comments. With the default seed, Qwen writes pages of analysis and hits the token cap before any code: 11% of programs ran, against 89% code-first. |
-| `--thinking on --thinking-budget 4096` | A private reasoning pass. vLLM ends the thinking block after 4096 tokens (`thinking_token_budget`, enabled by `--reasoning-config` in the deploy). `--thinking off` turns it off; `server` sends nothing. |
-| `--max-tokens 8192` | Floor on every call's `max_tokens` (the default for this provider): 4096 thinking + about 4k for the code. The first Qwen3.8 run used 1024 thinking tokens and solved 0-2 of 120 tasks per generation. 3000 was too small for Qwen on ARC; 6000 was used for the measured run below. |
+| `--thinking on --thinking-budget 4096` | A private reasoning pass. vLLM ends the thinking block after 4096 tokens (`thinking_token_budget`, enabled by `--reasoning-config` in the deploy) by inserting Qwen's official early-stop text, "Considering the limited time by the user, I have to give the solution based on the thinking directly now." followed by `</think>`. `--thinking off` turns it off; `server` sends nothing. |
+| `--max-tokens 10000` | Floor on every call's `max_tokens` (the default for this provider): 4096 thinking + about 6k for the code. The first Qwen3.8 run used 1024 thinking tokens and solved 0-2 of 120 tasks per generation. 3000 was too small for Qwen on ARC; 6000 was used for the measured run below. |
 | `--concurrency 16` | Tasks in flight at once (the default for this provider, and the server's `--max-num-seqs`). 32 filled the KV cache and requests timed out; see troubleshooting. |
 | `--rpm 0 --tpm 0 --delay 0` | The defaults are sized for Groq's free tier and would serialize a parallel run. |
 | `--provider openai` / `--base-url` | Not needed when `OPENAI_BASE_URL` is set; the provider is picked from it. |

@@ -26,7 +26,7 @@ Local / OpenAI-compatible server (llama.cpp `llama-server`, vLLM, Ollama) instea
 
 That uses core/openai_compat_client.py: `--rpm` cap + exponential backoff only (TPM and reasoning-effort
 handling are Groq-only). Thinking is off by default (--thinking), 16 tasks run at once (--concurrency) and every call may use
-8192 tokens (--max-tokens); deploy/modal_vllm.py serves Qwen3.8-27B on Modal with a matching batch size. OPENAI_BASE_URL / OPENAI_API_KEY in .env work too, as does LLM_PROVIDER=openai.
+10000 tokens (--max-tokens); deploy/modal_vllm.py serves Qwen3.8-27B on Modal with a matching batch size. OPENAI_BASE_URL / OPENAI_API_KEY in .env work too, as does LLM_PROVIDER=openai.
 
 Reads GROQ_API_KEY from .env (falls back to the deterministic mock if unset). Two CSVs are
 written (both git-ignored via *_results.csv), rewritten after every generation:
@@ -207,7 +207,7 @@ def main() -> None:
                              "effort gpt-oss-120b spends ~1020 tokens of hidden reasoning on an ARC prompt and "
                              "returns EMPTY content within a 1024 budget")
     parser.add_argument("--max-tokens", type=int, default=None,
-                        help="floor on max_tokens for every call (agent knobs default to 1024; default: 8192 for "
+                        help="floor on max_tokens for every call (agent knobs default to 1024; default: 10000 for "
                              "the openai provider, 3000 for groq). Does not count "
                              "against TPM admission, but qwen's on-demand tier caps output at 1000/min")
     parser.add_argument("--rpm", type=int, default=30, help="max LLM calls per rolling minute (0 = no cap)")
@@ -268,7 +268,7 @@ def main() -> None:
     logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(message)s")
     provider = resolve_provider(args.provider, args.base_url)
     if args.max_tokens is None:
-        args.max_tokens = 8192 if provider == "openai" else 3000
+        args.max_tokens = 10000 if provider == "openai" else 3000
     if provider == "groq" and (args.rpm > 0 or args.tpm > 0):
         install_rate_limiter(args.rpm, args.tpm)
     if args.mode == "archive":

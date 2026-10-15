@@ -23,9 +23,11 @@ with the recommended runner flags, is deploy/README.md:
     OPENAI_BASE_URL=https://<workspace>--qwen38-27b-vllm-server.us-west.modal.direct/v1
     OPENAI_API_KEY=wk-<id>.ws-<secret>
     uv run python scripts/live_arc_run.py --model Qwen/Qwen3.8-27B --archetype "ARC Code-First Solver" \
-        --thinking on --thinking-budget 4096 --max-tokens 8192 --concurrency 16 --rpm 0 --tpm 0 --delay 0
+        --thinking on --thinking-budget 4096 --max-tokens 10000 --concurrency 16 --rpm 0 --tpm 0 --delay 0
 
-Sources: https://recipes.vllm.ai/Qwen/Qwen3.8-27B,
+Sources: https://recipes.vllm.ai/Qwen/Qwen3.8-27B, https://huggingface.co/Qwen/Qwen3.8-27B,
+https://qwen.readthedocs.io/en/stable/getting_started/quickstart.html (thinking-budget early stop),
+https://docs.vllm.ai/en/latest/features/reasoning_outputs/ (--reasoning-config),
 https://docs.vllm.ai/en/latest/features/quantization/llm_compressor/fp8/,
 https://modal.com/docs/guide/servers
 """
@@ -106,9 +108,15 @@ SERVER_ARGS = {
     "--max-num-batched-tokens": "8192",  # chunked-prefill budget, same as the SGLang config
     "--max-cudagraph-capture-size": str(TARGET_INPUTS),  # recipe: lower this on Mamba cache errors
     "--reasoning-parser": "qwen3",
-    # Lets requests cap thinking with `thinking_token_budget`; at the cap the server emits this end string
+    # Lets requests cap thinking with `thinking_token_budget`; at the cap the server emits this end string. It is
+    # Qwen's own early-stopping text (qwen.readthedocs.io quickstart, "thinking budget"), closed with the
+    # template's `</think>\n\n`, so the model sees the same hand-off it was trained to summarize from.
     "--reasoning-config": json.dumps(
-        {"reasoning_start_str": "<think>", "reasoning_end_str": "Time to write the code now.\n</think>\n\n"}
+        {
+            "reasoning_start_str": "<think>",
+            "reasoning_end_str": "\n\nConsidering the limited time by the user, I have to give the solution based on "
+            "the thinking directly now.\n</think>\n\n",
+        }
     ),
     "--enable-auto-tool-choice": "",
     "--tool-call-parser": "qwen3_coder",

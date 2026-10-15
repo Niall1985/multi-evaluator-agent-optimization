@@ -28,7 +28,7 @@ def main() -> None:
     parser.add_argument("--generation", type=int, required=True, help="candidate whose prompt and knobs to use")
     parser.add_argument("--task", required=True, help="ARC task id, e.g. arc_1ae2feb7")
     parser.add_argument("--model", default="Qwen/Qwen3.8-27B")
-    parser.add_argument("--max-tokens", type=int, default=8192)
+    parser.add_argument("--max-tokens", type=int, default=10000)
     parser.add_argument("--thinking-budget", type=int, default=1024)
     args = parser.parse_args()
 
