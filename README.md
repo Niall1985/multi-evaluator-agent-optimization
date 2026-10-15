@@ -232,9 +232,12 @@ multi-evaluator-agent-optimization/
 │   ├── scoring.py             # Cost-penalized scalarization: ∑(w·μ) - λ∑c
 │   ├── bandit.py              # UCB1 multi-armed bandit for mutation operators
 │   └── fanova.py              # Gap 4: Functional ANOVA Sobol variance decomposition
-├── tasks/
+├── benchmarks/                # (was `tasks/`) benchmark suites
 │   ├── __init__.py
-│   └── benchmark_tasks.py     # Benchmark suites: 7 Coding (HumanEval/MBPP) + 5 Sentiment Analysis
+│   ├── benchmark_tasks.py     # 7 canonical HumanEval / MBPP / algorithmic tasks + BenchmarkTask dataclass
+│   └── arc_challenge/         # ARC-AGI grid tasks: split-file data, real + partial evaluators, viz
+├── scripts/
+│   └── live_arc_run.py        # Headless whole-ARC run against the live Groq API (rate limits, CSVs)
 ├── tests/
 │   ├── __init__.py
 │   └── test_pipeline.py       # 17 comprehensive unit & integration tests covering Gaps 1-6 & domains
@@ -264,21 +267,35 @@ multi-evaluator-agent-optimization/
 
 ## ⚡ Quickstart & Execution Guide
 
-### 1. Installation
-```powershell
-# Clone the repository
+### 1. Install Dependencies
+The project is managed with [uv](https://docs.astral.sh/uv/) (`pyproject.toml`):
+```bash
 git clone https://github.com/your-username/multi-evaluator-agent-optimization.git
 cd multi-evaluator-agent-optimization
-
-# Install Python dependencies
-pip install -r requirements.txt
+uv sync
 ```
+(`pip install -r requirements.txt` still works if you prefer a plain virtualenv.)
 
 ### 2. Environment Configuration
 Set your Groq API key in `.env` (optional — offline mock simulation runs automatically if omitted):
 ```bash
 GROQ_API_KEY=your_groq_api_key_here
 ```
+If no key is provided, the framework operates in offline mock simulation mode.
+
+### 3. Launch Streamlit Web UI
+```bash
+uv run streamlit run app.py
+```
+
+### 4. Run the tests
+```bash
+uv run pytest
+```
+
+### 5. Run on a self-hosted model (vLLM on Modal, llama.cpp)
+See [`deploy/README.md`](deploy/README.md): deploying Qwen3.8-27B on a Modal A100, the recommended
+`scripts/live_arc_run.py` flags for the ARC-AGI 2025 evaluation set, monitoring, cost and troubleshooting.
 
 ---
 

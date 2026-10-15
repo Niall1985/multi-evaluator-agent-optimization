@@ -97,69 +97,20 @@ AGENT_ARCHETYPES: Dict[str, Dict[str, Any]] = {
         ),
         "harness_knobs": HarnessKnobs(temperature=0.3, max_retries=2, top_p=0.90, max_tokens=1024),
     },
-
-    # -------------------------------------------------------------
-    # SENTIMENT ANALYSIS AGENT ARCHETYPES (SentiToolKit)
-    # -------------------------------------------------------------
-    "SentiToolKit Neural Specialist": {
-        "domain": "sentiment",
-        "id_suffix": "sentitoolkit",
-        "description": "Harnesses SentiAnalyzer SentiToolKit neural model for highly calibrated sentiment classification.",
+    # Without it, a model that reasons in prose (Qwen3.6 with thinking off) spends the whole token budget on
+    # analysis and never reaches the code block.
+    "ARC Code-First Solver": {
+        "id_suffix": "codefirst",
+        "description": "Answers with one Python program and keeps reasoning to brief code comments.",
         "system_prompt": (
-            "You are an expert Sentiment Analysis Specialist powered by SentiAnalyzer's SentiToolKit tensor model. "
-            "Given text reviews, synthesize clean Python functions using `from SentiAnalyzer.Main_tensor_model import SentiToolKit` "
-            "to classify input into 'Positive', 'Negative', or 'Neutral'. "
-            "Handle edge cases, neutral statements, and multi-clause reviews accurately."
+            "You are an expert competitive problem solver.\n"
+            "- Output exactly one ```python block that defines solve(grid). No text outside the block.\n"
+            "- Put reasoning in short code comments.\n"
+            "- Find one rule that fits every example and works for any grid size."
         ),
-        "harness_knobs": HarnessKnobs(temperature=0.4, max_retries=2, top_p=0.90, max_tokens=512),
+        "harness_knobs": HarnessKnobs(temperature=0.5, max_retries=2, top_p=0.95, max_tokens=1024),
     },
-    "Nuance & Aspect Sentiment Reasoner": {
-        "domain": "sentiment",
-        "id_suffix": "senti_nuance",
-        "description": "Expert in resolving contrastive conjunctions ('but', 'however', 'although') and aspect weighting.",
-        "system_prompt": (
-            "You are a linguistic sentiment reasoning agent. For every review: "
-            "1. Deconstruct contrastive clauses to identify the primary dominant polarity clause. "
-            "2. Leverage SentiToolKit to classify the final dominant polarity as 'Positive', 'Negative', or 'Neutral'. "
-            "Output verified, deterministic Python code solving the task."
-        ),
-        "harness_knobs": HarnessKnobs(temperature=0.5, max_retries=2, top_p=0.95, max_tokens=512),
-    },
-    "Sarcasm & Negation Analyst": {
-        "domain": "sentiment",
-        "id_suffix": "senti_negation",
-        "description": "Specialized in double negations ('not bad at all'), sarcasm, and subtle polarity shifts.",
-        "system_prompt": (
-            "You are a defensive sentiment analyst specialized in detecting double negations, ironic praise, and subtle idioms. "
-            "Accurately map negations without polarity inversion and classify into 'Positive', 'Negative', or 'Neutral' using SentiToolKit."
-        ),
-        "harness_knobs": HarnessKnobs(temperature=0.3, max_retries=3, top_p=0.85, max_tokens=512),
-    },
-    "Fast Production Sentiment Classifier": {
-        "domain": "sentiment",
-        "id_suffix": "senti_fast",
-        "description": "High-throughput sentiment classifier minimizing latency and returning exact category tokens.",
-        "system_prompt": (
-            "You are a fast, production sentiment classifier. Deliver pure Python code using SentiToolKit "
-            "returning strictly 'Positive', 'Negative', or 'Neutral'. Zero filler."
-        ),
-        "harness_knobs": HarnessKnobs(temperature=0.2, max_retries=1, top_p=0.80, max_tokens=256),
-    },
-
-    # -------------------------------------------------------------
 }
-
-
-def get_archetypes_by_domain(domain: str) -> Dict[str, Dict[str, Any]]:
-    """Returns archetypes filtered by domain ('coding', 'sentiment')."""
-    return {k: v for k, v in AGENT_ARCHETYPES.items() if v.get("domain", "coding") == domain}
-
-
-def get_default_archetype(domain: str) -> str:
-    """Returns the default archetype name for a given domain."""
-    if domain == "sentiment":
-        return "SentiToolKit Neural Specialist"
-    return "General Balanced Assistant"
 
 
 @dataclass
@@ -186,6 +137,9 @@ class Agent:
     lineage_path: List[str] = field(default_factory=list)
     last_solution: str = ""
     task_id: Optional[str] = None
+    # Multi-task benchmarks (e.g. the whole ARC set): per-task outputs and scores behind the averaged `metrics`
+    task_solutions: Dict[str, str] = field(default_factory=dict)
+    task_metrics: Dict[str, Dict[str, float]] = field(default_factory=dict)
     created_at: float = field(default_factory=time.time)
 
     def __post_init__(self):
@@ -210,6 +164,8 @@ class Agent:
             "lineage_path": self.lineage_path,
             "last_solution": self.last_solution,
             "task_id": self.task_id,
+            "task_solutions": self.task_solutions,
+            "task_metrics": self.task_metrics,
             "created_at": self.created_at,
         }
 

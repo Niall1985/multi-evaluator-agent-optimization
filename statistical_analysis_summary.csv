@@ -1,0 +1,2 @@
+task_id,comparison,baseline_condition,n_runs,mean_full_adaptive_fitness,mean_baseline_fitness,mean_diff,wilcoxon_W,p_value_one_sided,p_value_two_sided,statistically_significant_0_05
+he_055_fib,full_adaptive vs single_metric,single_metric,2,0.965,0.9995,-0.0345,0.0,1.0,0.5,False

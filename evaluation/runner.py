@@ -1,74 +1,10 @@
-import os
-import time
+import ast
 import re
 import math
 from dataclasses import dataclass, field
 from typing import Dict, List, Any, Optional, Tuple, Callable
-from tasks.benchmark_tasks import BenchmarkTask
-
-_CACHED_SENTI_TOOLKIT = None
-
-
-class FallbackSentiToolKit:
-    """Deterministic fallback sentiment classifier matching SentiToolKit interface."""
-    def __call__(self, text: str) -> str:
-        t = str(text).lower()
-        if any(w in t for w in ["great", "excellent", "love", "good", "amazing", "smooth", "pleasant", "impressed", "wonderful", "flawless", "helpful"]):
-            if "not good" in t or "not great" in t or "not impressive" in t or "disappoint" in t:
-                return "Negative"
-            return "Positive"
-        if any(w in t for w in ["bad", "terrible", "awful", "horrible", "defect", "fail", "slow", "poor", "freeze", "crash", "worst", "unacceptable"]):
-            if "not bad" in t:
-                return "Positive"
-            return "Negative"
-        return "Neutral"
-
-
-def get_cached_senti_toolkit():
-    """Singleton cached instance of user's SentiToolKit to prevent re-initializing Keras graph."""
-    global _CACHED_SENTI_TOOLKIT
-    if _CACHED_SENTI_TOOLKIT is None:
-        try:
-            from SentiAnalyzer.Main_tensor_model import SentiToolKit
-            _CACHED_SENTI_TOOLKIT = SentiToolKit()
-
-            # Optimize __call__ with direct tensor inference (avoids slow progress bar & builds)
-            def _fast_call(sentence):
-                prepared = _CACHED_SENTI_TOOLKIT.prepare_text(sentence)
-                probs = _CACHED_SENTI_TOOLKIT.model(prepared, training=False).numpy()[0]
-                if probs[2] > 0.7:
-                    return 'Positive'
-                elif probs[1] > 0.4:
-                    return 'Neutral'
-                else:
-                    return 'Negative'
-
-            _CACHED_SENTI_TOOLKIT.__call__ = _fast_call
-
-            try:
-                import SentiAnalyzer.Main_tensor_model
-                SentiAnalyzer.Main_tensor_model.SentiToolKit = lambda *a, **kw: _CACHED_SENTI_TOOLKIT
-            except Exception:
-                pass
-        except BaseException:
-            _CACHED_SENTI_TOOLKIT = FallbackSentiToolKit()
-            try:
-                import sys, types
-                if "SentiAnalyzer.Main_tensor_model" not in sys.modules:
-                    mod = types.ModuleType("SentiAnalyzer.Main_tensor_model")
-                    mod.SentiToolKit = lambda *a, **kw: _CACHED_SENTI_TOOLKIT
-                    sys.modules["SentiAnalyzer.Main_tensor_model"] = mod
-                else:
-                    sys.modules["SentiAnalyzer.Main_tensor_model"].SentiToolKit = lambda *a, **kw: _CACHED_SENTI_TOOLKIT
-
-                if "SentiAnalyzer" not in sys.modules:
-                    pkg = types.ModuleType("SentiAnalyzer")
-                    pkg.__path__ = []
-                    pkg.Main_tensor_model = sys.modules["SentiAnalyzer.Main_tensor_model"]
-                    sys.modules["SentiAnalyzer"] = pkg
-            except Exception:
-                pass
-    return _CACHED_SENTI_TOOLKIT
+from benchmarks.benchmark_tasks import BenchmarkTask
+from evaluation.sandbox import run_program
 
 
 @dataclass
@@ -130,89 +66,71 @@ class CodeExecutionRunner:
     def __init__(self, timeout_sec: float = 2.0):
         self.timeout_sec = timeout_sec
 
-    @staticmethod
-    def extract_code(text: str) -> str:
-        """Extracts pure python code from LLM responses."""
-        match = re.search(r"```python\s*(.*?)\s*```", text, re.DOTALL)
-        if match:
-            return match.group(1)
-        match = re.search(r"```\s*(.*?)\s*```", text, re.DOTALL)
-        if match:
-            return match.group(1)
-        return text
+    # Typographic characters LLMs emit in prose that also leak into code (non-breaking hyphen, dashes, smart quotes).
+    _UNICODE_PUNCT = str.maketrans({"‑": "-", "‐": "-", "–": "-", "—": "-",
+                                    "‘": "'", "’": "'", "“": '"', "”": '"', " ": " "})
 
-    @classmethod
-    def _are_values_equal(cls, actual: Any, expected: Any) -> bool:
-        """Checks equality across numbers, floats, sentiment strings, and MCQ/FIB answers."""
-        if actual is None and expected is None:
+    @staticmethod
+    def _parses(code: str) -> bool:
+        try:
+            ast.parse(code)
             return True
-        if actual is None or expected is None:
+        except SyntaxError:
             return False
 
-        # Direct equality
-        if actual == expected:
-            return True
-
-        # Float comparison with tolerance
-        if isinstance(actual, (int, float)) and isinstance(expected, (int, float)):
-            return math.isclose(float(actual), float(expected), rel_tol=1e-5, abs_tol=1e-5)
-
-        # Numeric string comparison (e.g. "89" == 89 or "89.0" == 89)
-        if isinstance(expected, (int, float)) or (isinstance(expected, str) and expected.replace(".", "", 1).lstrip("-").isdigit()):
-            try:
-                exp_f = float(expected)
-                act_str = str(actual).strip().strip("`*\"'").rstrip(".").split()[0]
-                if math.isclose(float(act_str), exp_f, rel_tol=1e-5, abs_tol=1e-5):
-                    return True
-            except (ValueError, IndexError):
-                pass
-
-        # String normalization (case-insensitive, punctuation stripped)
-        str_act = str(actual).strip().strip("`*\"'").strip("()").strip()
-        str_exp = str(expected).strip().strip("`*\"'").strip("()").strip()
-
-        if str_act.lower() == str_exp.lower():
-            return True
-
-        # Sentiment normalization ('positive', 'negative', 'neutral')
-        if str_exp.lower() in ["positive", "negative", "neutral"]:
-            clean_act = str_act.lower()
-            if str_exp.lower() in clean_act:
-                return True
-
-        # MCQ Option normalization ('A', 'B', 'C', 'D')
-        if str_exp.upper() in ["A", "B", "C", "D"]:
-            match = re.search(r"\b([A-D])\b", str_act.upper())
-            if match and match.group(1) == str_exp.upper():
-                return True
-
-        return False
-
     @classmethod
-    def _extract_direct_answer(cls, text: str, expected: Any) -> Any:
-        """Fallback extractor when agent outputs textual answer without def solve()."""
-        clean_text = text.strip()
+    def extract_code(cls, text: str) -> str:
+        """Extracts the Python program from an LLM response.
 
-        # Sentiment Extraction
-        if isinstance(expected, str) and expected.lower() in ["positive", "negative", "neutral"]:
-            match = re.search(r"\b(positive|negative|neutral)\b", clean_text, re.IGNORECASE)
-            if match:
-                return match.group(1).capitalize()
+        Responses often contain several fenced blocks (a math/pseudo-code fence first, the real
+        ```python block later) or unfenced code after prose, so "first fence wins" is not enough.
+        Preference order: a block that parses AND defines a function (python-labelled first), then any
+        block that parses, then the whole text if it parses, then the tail from the first `def`/`import`
+        line. Typographic hyphens/quotes are normalised only when that is what stops a block parsing.
+        """
+        fences = re.findall(r"```([A-Za-z0-9_+-]*)[ \t]*\n?(.*?)```", text, re.DOTALL)
+        candidates = [(lang.lower(), body.strip()) for lang, body in fences if body.strip()]
+        # python-labelled blocks first, then unlabelled/other, keeping original order within each group
+        candidates.sort(key=lambda c: 0 if c[0] in ("python", "py", "python3") else 1)
 
-        # MCQ Option Extraction ('A', 'B', 'C', 'D')
-        if isinstance(expected, str) and expected.upper() in ["A", "B", "C", "D"]:
-            match = re.search(r"(?:answer|option|choice)?\s*[:\-\)]?\s*\(?([A-D])\)?", clean_text, re.IGNORECASE)
-            if match:
-                return match.group(1).upper()
+        def _usable(body: str) -> Optional[str]:
+            for variant in (body, body.translate(cls._UNICODE_PUNCT)):
+                if cls._parses(variant):
+                    return variant
+            return None
 
-        # FIB / Numeric answer extraction
-        if isinstance(expected, (int, float)):
-            match = re.search(r"(?:answer|result|is|equals)?\s*[:=]?\s*(-?\d+(?:\.\d+)?)", clean_text, re.IGNORECASE)
-            if match:
-                val = float(match.group(1))
-                return int(val) if val.is_integer() else val
+        parsed = [(lang, u) for lang, body in candidates if (u := _usable(body)) is not None]
+        for _lang, code in parsed:
+            if re.search(r"^\s*def\s+\w+", code, re.MULTILINE):
+                return code
+        if parsed:
+            return parsed[0][1]
 
-        return clean_text
+        whole = _usable(text.strip())
+        if whole is not None:
+            return whole
+        # Unfenced code after prose: keep everything from the first code-looking line
+        m = re.search(r"^(?:def|import|from|class)\s", text, re.MULTILINE)
+        if m:
+            tail = _usable(text[m.start():].strip())
+            if tail is not None:
+                return tail
+        if candidates:  # fenced but nothing parses anywhere: first block, as before (caller reports SyntaxError)
+            return candidates[0][1]
+        return text
+
+    @staticmethod
+    def _are_values_equal(actual: Any, expected: Any) -> bool:
+        """Checks equality with float tolerance if applicable."""
+        # Grid-style outputs (ARC tasks) may come back as numpy arrays; `==` on arrays is
+        # element-wise and ambiguous in a bool context, so normalise to nested lists first.
+        if hasattr(actual, "tolist"):
+            actual = actual.tolist()
+        if hasattr(expected, "tolist"):
+            expected = expected.tolist()
+        if isinstance(actual, float) and isinstance(expected, float):
+            return math.isclose(actual, expected, rel_tol=1e-5, abs_tol=1e-5)
+        return actual == expected
 
     @classmethod
     def run_task(
@@ -248,44 +166,25 @@ class CodeExecutionRunner:
             report.pass_rate = 1.0
             return report
 
-        # Compile and execute code in isolated namespace with pre-warmed libraries
-        namespace: Dict[str, Any] = {
-            "math": math,
-            "re": re,
-            "time": time,
-        }
+        # Exec and call in a child process with a per-call time limit (evaluation.sandbox)
+        inputs = [c.get("args", ()) if isinstance(c.get("args", ()), tuple) else (c.get("args"),)
+                  for _, _, c in cases_to_run]
+        run = run_program(code_str, [(fn_entry,), ("solve",)], inputs)
+        if run.load_error or not run.functions:
+            report.syntax_error = run.load_error or f"Function '{fn_entry}' not found or not callable."
+            for case_type, case_idx, case_dict in cases_to_run:
+                report.case_results.append(CaseExecutionResult(
+                    case_index=case_idx,
+                    case_type=case_type,
+                    args=case_dict.get("args", ()),
+                    expected=case_dict.get("expected"),
+                    passed=False,
+                    error=report.syntax_error,
+                ))
+            return report
 
-        # Wire SentiToolKit into the execution namespace for sentiment tasks
-        if getattr(task, "domain", "coding") == "sentiment":
-            cached_senti = get_cached_senti_toolkit()
-            if cached_senti is not None:
-                namespace["senti_model"] = cached_senti
-                namespace["SentiToolKit"] = lambda *a, **kw: cached_senti
-                try:
-                    import sys
-                    if "SentiAnalyzer.Main_tensor_model" in sys.modules:
-                        sys.modules["SentiAnalyzer.Main_tensor_model"].SentiToolKit = lambda *a, **kw: cached_senti
-                except Exception:
-                    pass
-
-        code_compiled = False
-        try:
-            exec(code_str, namespace)
-            code_compiled = True
-        except Exception as e:
-            report.syntax_error = f"{type(e).__name__}: {str(e)}"
-
-        solve_fn = namespace.get(fn_entry) or namespace.get("solve") if code_compiled else None
-        is_callable = callable(solve_fn)
-
-        start_time = time.perf_counter()
         passed_count = 0
-
-        for case_type, case_idx, case_dict in cases_to_run:
-            raw_args = case_dict.get("args", ())
-            if not isinstance(raw_args, tuple):
-                raw_args = (raw_args,)
-
+        for (case_type, case_idx, case_dict), raw_args, [(status, value)] in zip(cases_to_run, inputs, run.results):
             expected = case_dict.get("expected")
             expect_exception = case_dict.get("expect_exception", False)
 
@@ -297,37 +196,22 @@ class CodeExecutionRunner:
                 is_exception_expected=expect_exception,
             )
 
-            if is_callable:
-                try:
-                    actual = solve_fn(*raw_args)
-                    case_res.actual = actual
-
-                    if not expect_exception and cls._are_values_equal(actual, expected):
-                        case_res.passed = True
-                        passed_count += 1
-                    elif expect_exception:
-                        case_res.passed = False
-                except Exception as e:
-                    case_res.exception_raised = f"{type(e).__name__}: {str(e)}"
-                    if expect_exception:
-                        case_res.passed = True
-                        passed_count += 1
-                    else:
-                        case_res.passed = False
-            else:
-                # Fallback: direct text answer extraction
-                actual = cls._extract_direct_answer(raw_code, expected)
-                case_res.actual = actual
-                if cls._are_values_equal(actual, expected):
+            if status == "ok":
+                case_res.actual = value
+                if not expect_exception and cls._are_values_equal(value, expected):
                     case_res.passed = True
                     passed_count += 1
-                else:
-                    case_res.error = report.syntax_error or f"Function '{fn_entry}' not callable and answer could not be extracted."
+                # else: wrong answer, or an exception was expected but not raised
+            else:
+                case_res.exception_raised = value
+                # A timeout or a dead child is the harness stopping the call, never the expected exception
+                if expect_exception and not value.startswith(("TimeoutError: call exceeded", "ChildProcessError")):
+                    case_res.passed = True
+                    passed_count += 1
 
             report.case_results.append(case_res)
 
-        elapsed_ms = (time.perf_counter() - start_time) * 1000.0
-        report.latency_ms = elapsed_ms
+        report.latency_ms = run.elapsed_ms
         report.passed_count = passed_count
         report.pass_rate = float(passed_count / report.total_count) if report.total_count > 0 else 0.0
 

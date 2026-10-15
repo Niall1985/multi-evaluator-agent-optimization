@@ -7,7 +7,7 @@ from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 
 from controller import EvolutionController
-from tasks.benchmark_tasks import BENCHMARK_TASKS
+from benchmarks.benchmark_tasks import BENCHMARK_TASKS
 from core.agent import AGENT_ARCHETYPES
 
 app = FastAPI(title="Multi-Objective Agent Optimization API", version="2.0.0")

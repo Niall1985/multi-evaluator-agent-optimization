@@ -45,3 +45,54 @@ class UCB1MutationBandit:
             self.counts[arm_name] += 1
             self.rewards[arm_name] += reward
             self.total_pulls += 1
+
+
+class UCB1TaskSelector:
+    """UCB1 over benchmark tasks (program-archive mode): which tasks get a call this generation.
+
+    Index of task t: mean reward + c * sqrt(ln N / n_t), with c = sqrt(2) as in Auer, Cesa-Bianchi & Fischer
+    (2002) UCB1 and UCB1MutationBandit. UCB1 starts by playing every arm once; here that first pull is the
+    seed generation, and its reward is the task's archived weighted score, so a task whose seed program is
+    already close starts with a higher estimate. Later rewards are the gain in the task's best archived score.
+    A solved task is retired and never selected again.
+    """
+
+    def __init__(self, c: float = 1.414):
+        self.c = c
+        self.counts: Dict[str, int] = {}
+        self.rewards: Dict[str, float] = {}
+        self.retired: set = set()
+        self.total_pulls = 0
+
+    def update(self, task_id: str, reward: float) -> None:
+        self.counts[task_id] = self.counts.get(task_id, 0) + 1
+        self.rewards[task_id] = self.rewards.get(task_id, 0.0) + float(reward)
+        self.total_pulls += 1
+
+    def retire(self, task_id: str) -> None:
+        self.retired.add(task_id)
+
+    def index(self, task_id: str) -> float:
+        n = self.counts.get(task_id, 0)
+        if n == 0:
+            return float("inf")
+        return self.rewards[task_id] / n + self.c * math.sqrt(math.log(max(1, self.total_pulls)) / n)
+
+    def select(self, task_ids: List[str], k: int) -> List[str]:
+        """The k active tasks with the highest index (unpulled first), ties broken at random."""
+        active = [t for t in task_ids if t not in self.retired]
+        random.shuffle(active)
+        return sorted(active, key=self.index, reverse=True)[:max(0, k)]
+
+    def state(self) -> Dict[str, object]:
+        return {"c": self.c, "counts": self.counts, "rewards": self.rewards,
+                "retired": sorted(self.retired), "total_pulls": self.total_pulls}
+
+    @classmethod
+    def from_state(cls, state: Dict[str, object]) -> "UCB1TaskSelector":
+        sel = cls(c=float(state["c"]))
+        sel.counts = dict(state["counts"])
+        sel.rewards = dict(state["rewards"])
+        sel.retired = set(state["retired"])
+        sel.total_pulls = int(state["total_pulls"])
+        return sel

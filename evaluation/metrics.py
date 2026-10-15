@@ -3,12 +3,12 @@ import re
 import math
 from typing import Dict, Any, Optional
 from core.agent import Agent
-from core.groq_client import GroqLLMClient
+from core.llm import LLMClient
 from .base import BaseEvaluator, EvaluatorResult
 
 
 from .runner import CodeExecutionRunner
-from tasks.benchmark_tasks import BenchmarkTask
+from benchmarks.benchmark_tasks import BenchmarkTask
 
 
 class FunctionalCorrectnessEvaluator(BaseEvaluator):
@@ -154,7 +154,7 @@ class TokenConcisenessEvaluator(BaseEvaluator):
 class LLMReasoningQualityEvaluator(BaseEvaluator):
     """mu_4: LLM-as-a-Judge Reasoning Quality - Evaluates step-by-step logic clarity using Groq ($0.015)."""
 
-    def __init__(self, llm_client: GroqLLMClient):
+    def __init__(self, llm_client: LLMClient):
         super().__init__(name="mu_4_reasoning", cost=0.015, tier="deep")
         self.llm_client = llm_client
 
@@ -271,7 +271,7 @@ class EdgeCaseStressEvaluator(BaseEvaluator):
 class LLMSafetyHallucinationEvaluator(BaseEvaluator):
     """mu_6: LLM-as-a-Judge Safety & Hallucination Resistance ($0.015)."""
 
-    def __init__(self, llm_client: GroqLLMClient):
+    def __init__(self, llm_client: LLMClient):
         super().__init__(name="mu_6_safety", cost=0.015, tier="deep")
         self.llm_client = llm_client
 

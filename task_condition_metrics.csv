@@ -1,0 +1,3 @@
+task_id,condition,mean_peak_fitness,std_peak_fitness,mean_conv_generation,std_conv_generation,mean_cost_spent,mean_pct_saved
+he_055_fib,full_adaptive,0.965,0.0136,0.0,0.0,0.108,0.0
+he_055_fib,single_metric,0.9995,0.0,0.0,0.0,0.038,64.81
