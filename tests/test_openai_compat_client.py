@@ -5,6 +5,7 @@ import os
 import subprocess
 import sys
 import threading
+import time
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from unittest import mock
@@ -34,14 +35,46 @@ class StubServer:
 
         class Handler(BaseHTTPRequestHandler):
             def do_POST(self):
-                stub.requests.append(json.loads(self.rfile.read(int(self.headers["Content-Length"]))))
+                req = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+                stub.requests.append(req)
                 status, body = stub.responses.pop(0) if stub.responses else (200, _completion("ok"))
+                if status == 200 and req.get("stream"):
+                    self._send_stream(body)
+                    return
                 payload = json.dumps(body).encode()
                 self.send_response(status)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(payload)))
                 self.end_headers()
                 self.wfile.write(payload)
+
+            def _send_stream(self, body):
+                """The completion as server-sent events: content in two deltas, the finish reason, then a usage
+                chunk (stream_options.include_usage). `stall_after_first` seconds of silence after the first delta
+                imitates a response that never arrives."""
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.end_headers()
+                choice = body["choices"][0]
+                text = choice["message"]["content"]
+                base = {"id": "x", "object": "chat.completion.chunk", "created": 0, "model": "local"}
+
+                def event(choices, usage=None):
+                    self.wfile.write(f"data: {json.dumps({**base, 'choices': choices, 'usage': usage})}\n\n".encode())
+                    self.wfile.flush()
+
+                try:
+                    half = len(text) // 2
+                    event([{"index": 0, "delta": {"role": "assistant", "content": text[:half]}, "finish_reason": None}])
+                    if body.get("stall_after_first"):
+                        time.sleep(body["stall_after_first"])
+                    event([{"index": 0, "delta": {"content": text[half:]}, "finish_reason": None}])
+                    event([{"index": 0, "delta": {}, "finish_reason": choice["finish_reason"]}])
+                    if body.get("usage"):
+                        event([], body["usage"])
+                    self.wfile.write(b"data: [DONE]\n\n")
+                except (BrokenPipeError, ConnectionResetError):
+                    pass  # the client gave up on a stalled stream
 
             def log_message(self, *args):
                 pass
@@ -100,6 +133,31 @@ class TestOpenAICompatClient(unittest.TestCase):
             self.client(server, enable_thinking=True, thinking_budget=512).generate("s", "u")
             self.assertEqual(server.requests[2]["chat_template_kwargs"], {"enable_thinking": True})
             self.assertEqual(server.requests[2]["thinking_token_budget"], 512)
+        finally:
+            server.close()
+
+    def test_streams_by_default_and_non_streaming_still_works(self):
+        server = StubServer([(200, _completion("streamed answer")), (200, _completion("plain answer"))])
+        try:
+            self.assertEqual(self.client(server).generate("s", "u"), "streamed answer")
+            self.assertTrue(server.requests[0]["stream"])
+            self.assertEqual(server.requests[0]["stream_options"], {"include_usage": True})
+            self.assertEqual(self.client(server, stream=False).generate("s", "u"), "plain answer")
+            self.assertNotIn("stream", server.requests[1])
+        finally:
+            server.close()
+
+    def test_stalled_stream_is_retried_after_the_read_timeout(self):
+        stalled = _completion("never finishes")
+        stalled["stall_after_first"] = 3
+        server = StubServer([(200, stalled), (200, _completion("second try"))])
+        try:
+            c = self.client(server, stream_read_timeout=0.5)
+            t0 = time.monotonic()
+            self.assertEqual(c.generate("s", "u"), "second try")
+            self.assertLess(time.monotonic() - t0, 2.5)  # gave up on the stall well before it would have ended
+            self.assertEqual(len(server.requests), 2)
+            self.assertEqual(c.failed_calls, 0)
         finally:
             server.close()
 

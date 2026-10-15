@@ -23,6 +23,7 @@ from collections import deque
 from contextlib import contextmanager
 from typing import Iterator, Optional
 
+import httpx
 from openai import (
     APIConnectionError,
     APIStatusError,
@@ -51,6 +52,8 @@ class OpenAICompatLLMClient:
         min_max_tokens: int = 0,
         enable_thinking: Optional[bool] = None,
         thinking_budget: Optional[int] = None,
+        stream: bool = True,
+        stream_read_timeout: float = 120.0,
     ):
         self.base_url = base_url
         self.model = model
@@ -67,8 +70,15 @@ class OpenAICompatLLMClient:
         # vLLM's `thinking_token_budget`: after this many reasoning tokens the server ends the thinking block
         # (needs --reasoning-parser; see deploy/modal_vllm.py --reasoning-config). None = no limit.
         self.thinking_budget = thinking_budget
+        # Streaming: a non-streamed answer sends no bytes for minutes, and on the Modal endpoint ~2-5 of 22
+        # requests at a time never got their finished response (the server showed 17-20 running while the client
+        # had 22 in flight) and sat out the full 600 s timeout. Streamed tokens keep the connection busy, and a
+        # stall is caught by the per-read timeout (the gap between chunks) after `stream_read_timeout` seconds.
+        self.stream = stream
+        read_timeout = stream_read_timeout if stream else timeout
         # The SDK's own retries are off so the backoff below is the only one
-        self.client = OpenAI(base_url=base_url, api_key=self.api_key, max_retries=0, timeout=timeout)
+        self.client = OpenAI(base_url=base_url, api_key=self.api_key, max_retries=0,
+                             timeout=httpx.Timeout(timeout, read=read_timeout, connect=30.0))
 
         # Attributes the controller, UI and runner read on any client
         self.is_mock = False
@@ -145,14 +155,13 @@ class OpenAICompatLLMClient:
         """Usage and finish_reason of the last generate() on this thread ({} if it failed or none ran)."""
         return dict(getattr(self._local, "info", {}) or {})
 
-    def _record_usage(self, response) -> None:
-        usage = getattr(response, "usage", None)
+    def _record_usage(self, usage, finish_reason: Optional[str]) -> None:
         details = getattr(usage, "completion_tokens_details", None)
         info = {
             "prompt_tokens": int(getattr(usage, "prompt_tokens", 0) or 0),
             "completion_tokens": int(getattr(usage, "completion_tokens", 0) or 0),
             "reasoning_tokens": int(getattr(details, "reasoning_tokens", 0) or 0),
-            "finish_reason": response.choices[0].finish_reason,
+            "finish_reason": finish_reason,
         }
         self._local.info = info
         with self._lock:
@@ -174,7 +183,7 @@ class OpenAICompatLLMClient:
         for attempt in range(self.max_retries + 1):
             self._wait_for_slot()
             try:
-                response = self.client.chat.completions.create(
+                request = dict(
                     model=self.model,
                     messages=[
                         {"role": "system", "content": system_prompt},
@@ -185,10 +194,14 @@ class OpenAICompatLLMClient:
                     max_tokens=max(max_tokens, self.min_max_tokens),
                     extra_body=self._extra_body(),
                 )
-                self._record_usage(response)
-                return response.choices[0].message.content or ""
-            except (RateLimitError, InternalServerError, APIConnectionError) as e:
-                # APITimeoutError is a subclass of APIConnectionError
+                if not self.stream:
+                    response = self.client.chat.completions.create(**request)
+                    self._record_usage(response.usage, response.choices[0].finish_reason)
+                    return response.choices[0].message.content or ""
+                return self._generate_streamed(request)
+            except (RateLimitError, InternalServerError, APIConnectionError, httpx.TransportError) as e:
+                # APITimeoutError is a subclass of APIConnectionError. A stall or a dropped connection while a stream
+                # is being read surfaces as an httpx error (ReadTimeout, RemoteProtocolError), not an SDK one.
                 last_error = e
                 if attempt == self.max_retries:
                     break
@@ -204,3 +217,23 @@ class OpenAICompatLLMClient:
             self.failed_calls += 1
         logger.error(f"{self.base_url} failed; returning empty answer (failed calls so far: {self.failed_calls}). {last_error}")
         return ""
+
+    def _generate_streamed(self, request: dict) -> str:
+        """One streamed completion: the answer text, with usage from the final chunk (stream_options)."""
+        parts = []
+        finish_reason = None
+        usage = None
+        stream = self.client.chat.completions.create(
+            **request, stream=True, stream_options={"include_usage": True}
+        )
+        with stream:
+            for chunk in stream:
+                if chunk.usage is not None:
+                    usage = chunk.usage
+                for choice in chunk.choices:
+                    if choice.delta and choice.delta.content:
+                        parts.append(choice.delta.content)
+                    if choice.finish_reason:
+                        finish_reason = choice.finish_reason
+        self._record_usage(usage, finish_reason)
+        return "".join(parts)
