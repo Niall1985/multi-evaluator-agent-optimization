@@ -98,7 +98,7 @@ task (one MAP-Elites grid per task). Each generation:
 uv run python scripts/live_arc_run.py --mode archive \
     --model Qwen/Qwen3.8-27B --archetype "ARC Code-First Solver" \
     --thinking on --thinking-budget 4096 --max-tokens 10000 --concurrency 22 \
-    --repair-thinking-budget 2048 --repair-reasoning-effort low \
+    --repair-thinking-budget 4096 --repair-reasoning-effort low \
     --rpm 0 --tpm 0 --delay 0 --generations 20 \
     --islands 4 --tasks-per-child 30 --max-temperature 0.7 --token-cap 25000000 \
     --state live_arc_state.json --program-csv live_arc_program_results.csv \
@@ -110,8 +110,10 @@ uv run python scripts/live_arc_run.py --mode archive \
 - **Checkpoint:** `--state` is rewritten after every generation. Add `--resume` to continue from it.
 - **Program CSV:** one row per program, with its cell, scores, tokens and `finish_reason`.
 - **Repair calls think less:** a repair prompt already shows the failing demonstrations, so repair calls get
-  `--repair-thinking-budget 2048` and Qwen3.8's `reasoning_effort: low` (sent in `chat_template_kwargs`; both
-  are the defaults). Fresh attempts keep `--thinking-budget` and the model's default effort (xhigh).
+  Qwen3.8's `reasoning_effort: low` (sent in `chat_template_kwargs`) with `--repair-thinking-budget 4096`; both
+  are the defaults. Fresh attempts keep `--thinking-budget` and the model's default effort (xhigh). A 2048
+  budget was tried first: 18 of 58 repairs then kept reasoning inside code comments, hit `--max-tokens`, and
+  mostly never closed their code block.
 
 ### Why these flags
 

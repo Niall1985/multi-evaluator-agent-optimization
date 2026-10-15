@@ -247,9 +247,10 @@ def main() -> None:
                         help="agent: one child per generation scored on every task (the original loop). archive: "
                              "program-archive mode - every program kept per task, one child per island working on "
                              "UCB1-picked tasks, repairing archived programs; selection uses demonstration pairs only")
-    parser.add_argument("--repair-thinking-budget", type=int, default=2048,
+    parser.add_argument("--repair-thinking-budget", type=int, default=4096,
                         help="archive mode, --thinking on: thinking budget for repair calls (fresh attempts keep "
-                             "--thinking-budget). 0 = same as --thinking-budget")
+                             "--thinking-budget). 0 = same as --thinking-budget. 2048 was too small for Qwen3.8: "
+                             "31%% of repairs kept reasoning in code comments and hit max_tokens")
     parser.add_argument("--repair-reasoning-effort", default="low", choices=["xhigh", "medium", "low", "none"],
                         help="archive mode, --thinking on: Qwen3.8 reasoning_effort for repair calls "
                              "(chat_template_kwargs; fresh attempts use the model default, xhigh). none = send nothing")
