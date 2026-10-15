@@ -254,8 +254,8 @@ def main() -> None:
     parser.add_argument("--max-temperature", type=float, default=0.7,
                         help="archive mode: upper bound of the temperature the GP proposes")
     parser.add_argument("--state", default="live_arc_state.json",
-                        help="archive mode: JSON checkpoint (every program, selector state), rewritten each "
-                             "generation; with --resume the run continues from it")
+                        help="archive mode: JSON checkpoint (every program, selector state), written durably after "
+                             "the seed and every generation; with --resume the run continues from it")
     parser.add_argument("--program-csv", default="live_arc_program_results.csv",
                         help="archive mode: one row per program written")
     parser.add_argument("--token-cap", type=int, default=0,
@@ -386,6 +386,7 @@ def run_archive(args, provider: str) -> None:
         n_islands=args.islands,
         tasks_per_child=args.tasks_per_child,
         knob_bounds={"temperature": (0.1, args.max_temperature), "top_p": (0.6, 1.0)},
+        state_path=args.state,
     )
     ctrl.csv_filepath = args.csv
     ctrl.sampler.deep_tier_threshold = args.deep_threshold
@@ -405,7 +406,6 @@ def run_archive(args, provider: str) -> None:
         seed = ctrl.history_records[0]
         print(f"gen 0 seed  fitness={seed['fitness']:.4f} solved(demos)={len(ctrl.archive.solved_tasks)}"
               f"/{len(seed['task_metrics'])} metrics={seed['metrics']} {token_line(client)}", flush=True)
-        ctrl.save_state(args.state)
         write_program_csv(args.program_csv, ctrl)
         if args.report_test:
             report_archive_held_out(ctrl, args.task_csv)
@@ -427,7 +427,6 @@ def run_archive(args, provider: str) -> None:
                 print(f"   island {c['island']} {c['mutation_type']:<22} parent={c['parent_id']} "
                       f"fitness={c['fitness']:.4f} dF={c['delta_f']:+.4f} tasks={len(c['task_deltas'])} "
                       f"repairs={c['repairs']} new solves={len(c['new_solves'])}", flush=True)
-            ctrl.save_state(args.state)
             write_program_csv(args.program_csv, ctrl)
             if args.report_test:
                 report_archive_held_out(ctrl, args.task_csv)

@@ -58,6 +58,7 @@ class EvolutionController:
         tasks_per_child: int = 30,
         migration_interval: int = 5,
         knob_bounds: Optional[Dict[str, Tuple[float, float]]] = None,
+        state_path: Optional[str] = None,
     ):
         self.api_key = api_key
         self.model = model
@@ -79,6 +80,9 @@ class EvolutionController:
         self.tasks_per_child = max(1, tasks_per_child)
         self.migration_interval = max(1, migration_interval)
         self.task_selector = UCB1TaskSelector()
+        # Program-archive mode: checkpoint written after the seed and after every generation (save_state), so a
+        # crash loses at most the generation in progress; load_state resumes from it.
+        self.state_path = state_path
         # Spec §3.3's W: fANOVA is measured every W generations and prunes after W consecutive low windows
         self.fanova_window = max(1, fanova_window)
         self.csv_filepath = "optimization_results.csv"
@@ -811,6 +815,8 @@ class EvolutionController:
             "mutation_goal": seed.mutation_description,
             "island": None,
         })
+        if self.state_path:
+            self.save_state(self.state_path)
 
     def _run_archive_generation(self) -> Dict[str, Any]:
         """One generation of program-archive mode. Each decision has one selector:
@@ -973,6 +979,8 @@ class EvolutionController:
             self._update_fanova()
         migrations = self.archive.migrate_ring() if gen % self.migration_interval == 0 else []
         self.archive.export_to_csv(self.csv_filepath)
+        if self.state_path:
+            self.save_state(self.state_path)
         return {
             "generation": gen,
             "children": child_records,
@@ -1003,12 +1011,28 @@ class EvolutionController:
 
         return {t.id: r for t, r in zip(tasks, self._map_tasks(score, tasks))}
 
-    def save_state(self, path: str) -> str:
-        """Writes the program-archive run (archive with every program, UCB1 tasks, TPE / Optuna trials, GP
-        observations) to JSON; load_state continues from it."""
+    STATE_VERSION = 1
+    _FANOVA_STATE = ("importance_scores", "normalized_importance", "redundant_with", "below_threshold_windows",
+                     "windows_measured", "total_variance")
+
+    def save_state(self, path: Optional[str] = None) -> str:
+        """Writes the program-archive run to a JSON checkpoint: the archive with every program, UCB1 task arms,
+        TPE / Optuna trials, GP observations, fANOVA pruning streaks, RNG state and the history.
+
+        Durable: written to a temp file, fsynced, then atomically renamed over the previous checkpoint (and the
+        directory fsynced), so a crash or power cut leaves either the old or the new checkpoint, never a torn one.
+        It is only written between generations, where every selector agrees with the archive."""
+        path = path or self.state_path
+        if not path:
+            raise ValueError("save_state needs a path (or state_path)")
         gp = self.bayesian_optimizer
+        np_state = np.random.get_state()
         state = {
+            "version": self.STATE_VERSION,
             "evolution_mode": self.evolution_mode,
+            "selected_task_id": self.selected_task_id,
+            "metric_names": self.metric_names,
+            "n_islands": self.n_islands,
             "current_generation": self.current_generation,
             "cumulative_adaptive_cost": self.cumulative_adaptive_cost,
             "cumulative_naive_cost": self.cumulative_naive_cost,
@@ -1016,18 +1040,37 @@ class EvolutionController:
             "task_selector": self.task_selector.state(),
             "sampler_trials": [list(t) for t in self.sampler.trials],
             "gp": {"weights": gp.X_history, "knobs": gp.knob_history, "delta_f": gp.y_history},
+            "fanova": {k: getattr(self.fanova, k) for k in self._FANOVA_STATE if hasattr(self.fanova, k)},
+            "rng": {
+                "python": [random.getstate()[0], list(random.getstate()[1]), random.getstate()[2]],
+                "numpy": [np_state[0], np_state[1].tolist(), *np_state[2:]],
+            },
             "history_records": self.history_records,
         }
-        tmp = path + ".tmp"
+        directory = os.path.dirname(os.path.abspath(path))
+        tmp = f"{path}.tmp"
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(state, f, default=str)
-        os.replace(tmp, path)  # a crash mid-write leaves the previous checkpoint intact
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+        dir_fd = os.open(directory, os.O_RDONLY)
+        try:
+            os.fsync(dir_fd)  # make the rename itself durable
+        finally:
+            os.close(dir_fd)
         return path
 
-    def load_state(self, path: str) -> int:
-        """Restores a save_state checkpoint into this (seedless) controller; returns the last generation."""
+    def load_state(self, path: Optional[str] = None) -> int:
+        """Restores a save_state checkpoint into a controller built with evaluate_seed=False and the same
+        benchmark and evaluator pool; returns the last completed generation."""
+        path = path or self.state_path
         with open(path, encoding="utf-8") as f:
             state = json.load(f)
+        if state.get("evolution_mode") != self.evolution_mode:
+            raise ValueError(f"checkpoint is a {state.get('evolution_mode')!r} run, this controller is {self.evolution_mode!r}")
+        if state.get("metric_names") and state["metric_names"] != self.metric_names:
+            raise ValueError(f"checkpoint evaluators {state['metric_names']} differ from this pool's {self.metric_names}")
         self.archive = PopulationArchive.from_state(state["archive"])
         self.task_selector = UCB1TaskSelector.from_state(state["task_selector"])
         menu = [name for name, _ in self.mutator.get_available_strategies()]
@@ -1036,6 +1079,14 @@ class EvolutionController:
         gp = self.bayesian_optimizer
         for w, k, y in zip(state["gp"]["weights"], state["gp"]["knobs"], state["gp"]["delta_f"]):
             gp.add_observation(dict(zip(self.metric_names, w)), y, knobs=gp._unscale_knobs(np.array(k)))
+        for key, value in state.get("fanova", {}).items():
+            setattr(self.fanova, key, value)
+        rng = state.get("rng")
+        if rng:
+            version, internal, gauss = rng["python"]
+            random.setstate((version, tuple(internal), gauss))
+            kind, keys, *rest = rng["numpy"]
+            np.random.set_state((kind, np.array(keys, dtype=np.uint32), *rest))
         self.history_records = list(state["history_records"])
         self.current_generation = int(state["current_generation"])
         self.cumulative_adaptive_cost = float(state["cumulative_adaptive_cost"])

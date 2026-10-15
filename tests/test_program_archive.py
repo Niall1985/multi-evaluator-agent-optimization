@@ -169,19 +169,45 @@ class TestProgramArchiveMode(unittest.TestCase):
         self.assertTrue(children)
         self.assertTrue(all(rec["island"] in (0, 1) for rec in children))
 
-    def test_checkpoint_round_trip_continues(self):
-        ctrl = make_controller(RepairOnlyClient())
-        ctrl.run_generation()
+    def test_checkpoint_written_after_seed_and_each_generation_and_resumes(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "state.json")
-            ctrl.save_state(path)
-            resumed = make_controller(RepairOnlyClient(), evaluate_seed=False)
-            self.assertEqual(resumed.load_state(path), 1)
-        self.assertEqual(set(resumed.archive.programs), set(ctrl.archive.programs))
-        self.assertEqual(resumed.task_selector.counts, ctrl.task_selector.counts)
-        self.assertEqual(len(resumed.sampler.trials), len(ctrl.sampler.trials))
-        self.assertEqual(resumed.bayesian_optimizer.y_history, ctrl.bayesian_optimizer.y_history)
-        self.assertEqual(resumed.run_generation()["generation"], 2)
+            ctrl = make_controller(RepairOnlyClient(), state_path=path)
+            self.assertTrue(os.path.exists(path))  # seed checkpoint, before any generation
+            ctrl.run_generation()
+            ctrl.fanova.below_threshold_windows["arc_color_palette"] = 2
+            ctrl.save_state()
+            expected_draw = random.random(), float(np.random.random())
+
+            # A crash mid-write leaves only a stray temp file; the checkpoint itself stays readable
+            with open(path + ".tmp", "w") as f:
+                f.write("{torn")
+            resumed = make_controller(RepairOnlyClient(), evaluate_seed=False, state_path=path)
+            self.assertEqual(resumed.load_state(), 1)
+            self.assertEqual((random.random(), float(np.random.random())), expected_draw)
+            self.assertEqual(set(resumed.archive.programs), set(ctrl.archive.programs))
+            self.assertEqual(resumed.archive.task_cells, ctrl.archive.task_cells)
+            self.assertEqual(resumed.archive.islands, ctrl.archive.islands)
+            self.assertEqual(resumed.task_selector.counts, ctrl.task_selector.counts)
+            self.assertEqual(len(resumed.sampler.trials), len(ctrl.sampler.trials))
+            self.assertEqual(len(resumed.sampler.idea_study.trials), len(ctrl.sampler.trials))
+            self.assertEqual(resumed.bayesian_optimizer.y_history, ctrl.bayesian_optimizer.y_history)
+            self.assertEqual(resumed.fanova.below_threshold_windows["arc_color_palette"], 2)
+            self.assertEqual(len(resumed.history_records), len(ctrl.history_records))
+
+            self.assertEqual(resumed.run_generation()["generation"], 2)
+            again = make_controller(RepairOnlyClient(), evaluate_seed=False)
+            self.assertEqual(again.load_state(path), 2)  # the resumed run kept checkpointing
+
+    def test_checkpoint_rejects_a_different_run(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "state.json")
+            make_controller(RepairOnlyClient(), state_path=path)
+            other = EvolutionController(selected_task_id=ARC_BENCHMARK_ID, evaluator_pool_factory=build_arc_evaluator_pool,
+                                        llm_client=RepairOnlyClient(), evolution_mode="program_archive",
+                                        evaluate_seed=False)
+            with self.assertRaises(ValueError):
+                other.load_state(path)  # its pool still has arc_pass_at_2_test
 
 
 if __name__ == "__main__":
