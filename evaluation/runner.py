@@ -115,14 +115,48 @@ class CodeExecutionRunner:
         self.timeout_sec = timeout_sec
 
     @staticmethod
-    def extract_code(text: str) -> str:
-        """Extracts pure python code from LLM responses."""
-        match = re.search(r"```python\s*(.*?)\s*```", text, re.DOTALL)
-        if match:
-            return match.group(1)
-        match = re.search(r"```\s*(.*?)\s*```", text, re.DOTALL)
-        if match:
-            return match.group(1)
+    def extract_code(text: str, entry_point: str = "solve") -> str:
+        """Extracts pure python code from LLM responses.
+
+        Reasoning models routinely emit several fenced blocks and leave them
+        untagged, with prose snippets ahead of the real answer. Taking the first
+        fence then yields a fragment like ``nums[i] + nums[j] == target``, so
+        prefer the block that actually defines the entry point.
+        """
+        tags = [
+            (tag or "").strip().lower()
+            for tag in re.findall(r"```([A-Za-z0-9_+-]*)", text)
+        ]
+        bodies = re.findall(r"```[A-Za-z0-9_+-]*[^\S\n]*\n?(.*?)```", text, re.DOTALL)
+        tagged = list(zip(tags, bodies)) if len(tags) == len(bodies) else [("", b) for b in bodies]
+
+        python_first = [b for tag, b in tagged if tag in ("python", "py")] + [
+            b for tag, b in tagged if tag not in ("python", "py")
+        ]
+
+        def _pick(predicate):
+            for body in python_first:
+                if predicate(body):
+                    return body.strip()
+            return None
+
+        # 1. A block defining the requested entry point.
+        candidate = _pick(
+            lambda b: re.search(
+                r"^\s*(?:async\s+)?def\s+" + re.escape(entry_point) + r"\s*\(", b, re.MULTILINE
+            )
+        )
+        # 2. Any block defining a function or class.
+        candidate = candidate or _pick(
+            lambda b: re.search(r"^\s*(?:async\s+)?(?:def|class)\s+\w+", b, re.MULTILINE)
+        )
+        # 3. Any non-empty block.
+        candidate = candidate or _pick(lambda b: b.strip())
+        if candidate:
+            return candidate
+
+        # 4. No usable fence: the response may already be bare code, and the
+        #    caller still has _extract_direct_answer as a fallback.
         return text
 
     @classmethod
@@ -212,7 +246,9 @@ class CodeExecutionRunner:
     ) -> ExecutionReport:
         """Executes candidate code against test_cases and/or edge_cases using normalized args."""
         raw_code = code if code is not None else (agent_output or "")
-        code_str = cls.extract_code(raw_code)
+        code_str = cls.extract_code(
+            raw_code, entry_point=entry_point or (task.entry_point if task else "solve")
+        )
         report = ExecutionReport(code_extracted=code_str)
 
         fn_entry = entry_point or (task.entry_point if task else "solve")

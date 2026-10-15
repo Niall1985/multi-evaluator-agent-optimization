@@ -1,5 +1,6 @@
 import os
 import uvicorn
+from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -9,6 +10,8 @@ from typing import Optional, List, Dict, Any
 from controller import EvolutionController
 from tasks.benchmark_tasks import BENCHMARK_TASKS
 from core.agent import AGENT_ARCHETYPES
+
+load_dotenv()
 
 app = FastAPI(title="Multi-Objective Agent Optimization API", version="2.0.0")
 
@@ -21,8 +24,16 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Groq API key from .env / environment. Blank key => deterministic offline mock mode.
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
+DEFAULT_IS_MOCK = not bool(GROQ_API_KEY)
+
 # Global controller instance
-controller = EvolutionController(is_mock=True, model="openai/gpt-oss-120b")
+controller = EvolutionController(
+    api_key=GROQ_API_KEY,
+    is_mock=DEFAULT_IS_MOCK,
+    model="openai/gpt-oss-120b",
+)
 
 
 class StepRequest(BaseModel):
@@ -37,7 +48,7 @@ class ResetRequest(BaseModel):
     task_id: Optional[str] = None
     lambda_penalty: Optional[float] = 0.5
     acquisition_type: Optional[str] = "gp_ucb"
-    is_mock: Optional[bool] = True
+    is_mock: Optional[bool] = None  # None => live if GROQ_API_KEY is set, else mock
 
 
 @app.get("/api/status")
@@ -47,6 +58,8 @@ def get_status():
     best_agent = controller.archive.get_best_agent()
     return {
         "telemetry": telemetry,
+        "is_mock": controller.llm_client.is_mock,
+        "model": controller.llm_client.model,
         "current_generation": controller.current_generation,
         "agent_domain": controller.agent_domain,
         "selected_task_id": controller.selected_task_id,
@@ -217,7 +230,9 @@ def reset_controller(req: ResetRequest):
     domain = req.agent_domain or "coding"
     default_arch = get_default_archetype(domain)
     controller = EvolutionController(
-        is_mock=req.is_mock if req.is_mock is not None else True,
+        api_key=GROQ_API_KEY,
+        model="openai/gpt-oss-120b",
+        is_mock=req.is_mock if req.is_mock is not None else DEFAULT_IS_MOCK,
         agent_domain=domain,
         initial_archetype=req.archetype or default_arch,
         selected_task_id=req.task_id,

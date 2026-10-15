@@ -1,0 +1,5 @@
+metric,comparison,baseline,n_pairs,mean_treatment,mean_baseline,mean_diff,median_diff,wilcoxon_W,p_one_sided,p_two_sided,rank_biserial_effect,significant_0_05
+peak_correctness,full_adaptive vs single_metric,single_metric,26,0.6577,0.6577,0.0,0.0,0.0,0.5,1.0,0.0,False
+peak_correctness,full_adaptive vs static_cascade,static_cascade,26,0.6577,0.6577,0.0,0.0,0.0,0.5,1.0,0.0,False
+peak_correctness,full_adaptive vs ucb1_bandit,ucb1_bandit,26,0.6577,0.6577,0.0,0.0,0.0,0.5,1.0,0.0,False
+peak_correctness,full_adaptive vs no_pruning,no_pruning,26,0.6577,0.6577,0.0,0.0,0.0,0.5,1.0,0.0,False

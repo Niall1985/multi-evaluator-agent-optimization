@@ -331,3 +331,42 @@ Every generation cycle automatically appends detailed execution records to `opti
 ```
 generation, agent_id, parent_id, fitness, cost_spent, mutation_type, temperature, max_retries, active_evaluators_count, mu_1_correctness, mu_2_latency, mu_3_conciseness, mu_4_reasoning, mu_5_edge_cases, mu_6_safety, strategy, naive_cost_spent, cumulative_adaptive_cost, cumulative_naive_cost, task_id, system_prompt, top_p, max_tokens, delta_f, cost_saved_this_gen, solution_preview, weight_mu_1_correctness, weight_mu_2_latency, weight_mu_3_conciseness, weight_mu_4_reasoning, weight_mu_5_edge_cases, weight_mu_6_safety
 ```
+---
+
+## 📑 Capstone Report Generation Pipeline
+
+The BCSE497J project report is generated programmatically from raw experiment results, so
+every quoted figure traces back to a CSV and the whole document can be rebuilt after a re-run.
+
+```powershell
+# 1. Run the ablation (writes per-generation records to CSV)
+python run_experiments.py --runs 5 --generations 30
+
+# 2. Turn raw results into figures, tables and a JSON of every quoted scalar
+python report_analysis.py --mock-csv experiment_results.csv `
+                          --live-csv validation_live.csv `
+                          --outdir report_assets
+
+# 3. Render the .docx against the BCSE497J template formatting rules
+python build_report.py --assets report_assets --out BCSE497J_Project_Report.docx
+```
+
+| Script | Produces |
+| :--- | :--- |
+| `report_analysis.py` | `report_assets/figures/*.png`, `report_assets/tables/*.csv`, `report_assets/report_data.json` |
+| `report_content.py` | The narrative text of every chapter (numbers interpolated from `report_data.json`) |
+| `build_report.py` | The final `.docx`: A4, 3.81 cm binding margin, Times New Roman 12 pt, 1.5 spacing, 16/14/12 pt heading hierarchy, roman front matter then arabic body, centred page numbers, Word TOC field |
+
+**Before the final print**, edit the `CANDIDATE` dictionary at the top of `build_report.py`
+(name, register number, guide, HoD, month). The build prints a warning listing any
+placeholder still unfilled.
+
+### Analysis notes
+
+* **Normalised fitness.** Raw fitness sums `w_j · mu_j` over the *active* evaluators while the
+  weights live on the full six-metric simplex, so a condition that prunes evaluators sums only
+  part of the weight mass and is penalised for pruning. Cross-condition comparisons therefore use
+  `F_norm`, which divides the weighted score by the active weight mass before the cost penalty.
+  Both quantities are reported.
+* **Pooled Wilcoxon.** Per-task tests over `n` seeds cannot report a one-sided p below `0.5^n`,
+  so the primary analysis pools all matched task-seed pairs and reports rank-biserial effect sizes.

@@ -14,13 +14,12 @@ logger = logging.getLogger(__name__)
 
 import time
 
+# Verified live on Groq. The old Llama 3.x / Mixtral / Gemma entries were
+# decommissioned by Groq and returned 404, wasting a call each before falling through.
 FALLBACK_MODELS = [
     "openai/gpt-oss-120b",
-    "llama-3.3-70b-versatile",
-    "llama3-70b-8192",
-    "mixtral-8x7b-32768",
-    "gemma2-9b-it",
-    "openai/gpt-oss-20b"
+    "openai/gpt-oss-20b",
+    "qwen/qwen3.8-27b",
 ]
 
 
@@ -33,7 +32,17 @@ class GroqLLMClient:
         model: str = "openai/gpt-oss-120b",
         inter_call_delay: float = 1.5,
         is_mock: Optional[bool] = None,
+        strict: Optional[bool] = None,
     ):
+        # strict=True forbids silently substituting mock output for a failed live
+        # call. Without it a quota-exhausted run still writes a plausible-looking
+        # CSV, and the fabricated rows are indistinguishable from real ones.
+        if strict is None:
+            strict = os.getenv("GROQ_STRICT", "").strip().lower() in ("1", "true", "yes")
+        self.strict = strict
+        self.live_calls = 0
+        self.mock_calls = 0
+
         if is_mock is not None:
             self.is_mock = is_mock
             self.api_key = api_key or ""
@@ -49,9 +58,17 @@ class GroqLLMClient:
             try:
                 self.client = Groq(api_key=self.api_key.strip())
             except Exception as e:
+                if self.strict:
+                    raise RuntimeError(
+                        f"Groq client initialization failed and strict mode is on: {e}"
+                    ) from e
                 logger.warning(f"Failed to initialize Groq client: {e}. Falling back to mock mode.")
                 self.is_mock = True
         else:
+            if self.strict and not is_mock:
+                raise RuntimeError(
+                    "Strict mode requires a usable GROQ_API_KEY, but none was available."
+                )
             self.is_mock = True
 
     def generate(
@@ -64,6 +81,7 @@ class GroqLLMClient:
     ) -> str:
         """Generates response using Groq API with automatic TPM rate-limit retry backoff and fallbacks."""
         if self.is_mock or not self.client:
+            self.mock_calls += 1
             return self._mock_generate(system_prompt, user_prompt, temperature)
 
         candidate_models = [self.model] + [m for m in FALLBACK_MODELS if m != self.model]
@@ -71,7 +89,7 @@ class GroqLLMClient:
 
         for model_name in candidate_models:
             # Attempt up to 3 retries with exponential backoff on TPM rate limits
-            for attempt in range(3):
+            for attempt in range(6):
                 try:
                     if self.inter_call_delay > 0:
                         time.sleep(self.inter_call_delay)
@@ -86,14 +104,17 @@ class GroqLLMClient:
                         top_p=max(0.0, min(1.0, top_p)),
                         max_tokens=max_tokens,
                     )
+                    self.live_calls += 1
                     return response.choices[0].message.content or ""
                 except Exception as e:
                     err_str = str(e).lower()
                     last_error = e
                     # Check for rate limit / TPM / RPM error
                     if "429" in err_str or "rate limit" in err_str or "tokens per minute" in err_str:
-                        backoff = (attempt + 1) * 3.5
-                        logger.warning(f"Rate limit hit on {model_name} (attempt {attempt+1}/3). Backing off {backoff}s...")
+                        # The per-minute token bucket refills over a full minute, so a
+                        # 21-second ceiling gives up while the limit is still in force.
+                        backoff = min(20.0, (attempt + 1) * 5.0)
+                        logger.warning(f"Rate limit hit on {model_name} (attempt {attempt+1}/6). Backing off {backoff}s...")
                         time.sleep(backoff)
                         continue
                     elif "404" in err_str or "model_not_found" in err_str or "decommissioned" in err_str:
@@ -103,7 +124,14 @@ class GroqLLMClient:
                         logger.warning(f"Generation error on '{model_name}': {e}. Retrying.")
                         time.sleep(1.0)
 
+        if self.strict:
+            raise RuntimeError(
+                f"All Groq models failed after retries and strict mode is on, so the "
+                f"run is aborted rather than silently recording fabricated output. "
+                f"Last error: {last_error}"
+            )
         logger.error(f"All Groq models failed. Reverting to mock response. Error: {last_error}")
+        self.mock_calls += 1
         return self._mock_generate(system_prompt, user_prompt, temperature)
 
     def _mock_generate(self, system_prompt: str, user_prompt: str, temperature: float) -> str:
