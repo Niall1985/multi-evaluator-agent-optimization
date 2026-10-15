@@ -23,7 +23,7 @@ with the recommended runner flags, is deploy/README.md:
     OPENAI_BASE_URL=https://<workspace>--qwen38-27b-vllm-server.us-west.modal.direct/v1
     OPENAI_API_KEY=wk-<id>.ws-<secret>
     uv run python scripts/live_arc_run.py --model Qwen/Qwen3.8-27B --archetype "ARC Code-First Solver" \
-        --thinking on --thinking-budget 4096 --max-tokens 10000 --concurrency 16 --rpm 0 --tpm 0 --delay 0
+        --thinking on --thinking-budget 4096 --max-tokens 10000 --concurrency 22 --rpm 0 --tpm 0 --delay 0
 
 Sources: https://recipes.vllm.ai/Qwen/Qwen3.8-27B, https://huggingface.co/Qwen/Qwen3.8-27B,
 https://qwen.readthedocs.io/en/stable/getting_started/quickstart.html (thinking-budget early stop),
@@ -73,7 +73,9 @@ MEMORY_MB = 16384
 # Idle time before the container stops. Must outlast the client work between generations (scoring 120
 # programs in the sandbox, the GP fit: ~2.5 min): at 150 s the container drained right as gen 2 started.
 SCALEDOWN_WINDOW = 4 * MINUTES
-TARGET_INPUTS = 16  # 32 filled the KV cache with 6k-token answers and requests queued past the client timeout
+# 32 filled the 16-bit KV cache with 6k-token answers and queued requests past the client timeout. The FP8 KV
+# cache (~385k tokens on A100-40GB) has twice the room, so 22 fits with headroom for a few 30x30 prompts.
+TARGET_INPUTS = 22
 STARTUP_TIMEOUT = 30 * MINUTES
 
 serving_image = (
@@ -105,7 +107,7 @@ SERVER_ARGS = {
     # FlashInfer or Triton attention: https://docs.vllm.ai/en/latest/design/attention_backends/
     "--kv-cache-dtype": "fp8",
     "--max-num-seqs": str(TARGET_INPUTS),
-    "--max-num-batched-tokens": "8192",  # chunked-prefill budget, same as the SGLang config
+    "--max-num-batched-tokens": "16384",  # chunked-prefill budget: a 15k-token 30x30 ARC prompt prefills in ~1 step
     "--max-cudagraph-capture-size": str(TARGET_INPUTS),  # recipe: lower this on Mamba cache errors
     "--reasoning-parser": "qwen3",
     # Lets requests cap thinking with `thinking_token_budget`; at the cap the server emits this end string. It is

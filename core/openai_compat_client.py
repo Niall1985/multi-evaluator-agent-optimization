@@ -1,8 +1,8 @@
 """Second LLM provider: any OpenAI-compatible chat endpoint (llama.cpp `llama-server`, vLLM, Ollama, ...).
 
-Deliberately small next to GroqLLMClient: no fallback models, no reasoning-effort handling (only an on/off
-thinking switch), no quota or
-token-per-minute bookkeeping. It has
+Deliberately small next to GroqLLMClient: no fallback models, no quota or token-per-minute bookkeeping;
+thinking is an on/off switch plus a per-thread override of budget and Qwen3.8 reasoning_effort
+(call_options). It has
 
   - a requests-per-minute cap (sliding 60 s window) and a minimum gap between calls,
   - exponential backoff with jitter on retryable failures (429, 5xx, connection errors, timeouts),
@@ -20,7 +20,8 @@ import random
 import threading
 import time
 from collections import deque
-from typing import Optional
+from contextlib import contextmanager
+from typing import Iterator, Optional
 
 from openai import (
     APIConnectionError,
@@ -108,12 +109,32 @@ class OpenAICompatLLMClient:
             delay = min(self.backoff_max, self.backoff_base * (2 ** attempt))
             return delay * random.uniform(0.5, 1.0)  # jitter so parallel callers don't retry in lockstep
 
+    @contextmanager
+    def call_options(self, thinking_budget: Optional[int] = None,
+                     reasoning_effort: Optional[str] = None) -> Iterator[None]:
+        """Overrides the thinking budget and/or sets Qwen3.8's `reasoning_effort` (xhigh/medium/low, sent in
+        chat_template_kwargs) for generate() calls made inside the block on this thread only."""
+        previous = getattr(self._local, "options", {})
+        self._local.options = {k: v for k, v in {"thinking_budget": thinking_budget,
+                                                 "reasoning_effort": reasoning_effort}.items() if v is not None}
+        try:
+            yield
+        finally:
+            self._local.options = previous
+
     def _extra_body(self) -> Optional[dict]:
+        options = getattr(self._local, "options", {})
         body: dict = {}
+        template: dict = {}
         if self.enable_thinking is not None:
-            body["chat_template_kwargs"] = {"enable_thinking": self.enable_thinking}
-        if self.thinking_budget is not None:
-            body["thinking_token_budget"] = self.thinking_budget
+            template["enable_thinking"] = self.enable_thinking
+        if options.get("reasoning_effort") and self.enable_thinking is not False:
+            template["reasoning_effort"] = options["reasoning_effort"]
+        if template:
+            body["chat_template_kwargs"] = template
+        budget = options.get("thinking_budget", self.thinking_budget)
+        if budget is not None and self.enable_thinking is not False:
+            body["thinking_token_budget"] = budget
         return body or None
 
     @property

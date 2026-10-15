@@ -70,7 +70,7 @@ uv run python scripts/live_arc_run.py \
     --model Qwen/Qwen3.8-27B \
     --archetype "ARC Code-First Solver" \
     --thinking on --thinking-budget 4096 --max-tokens 10000 \
-    --concurrency 16 \
+    --concurrency 22 \
     --rpm 0 --tpm 0 --delay 0 \
     --generations 10 \
     --csv live_arc_qwen38_results.csv --task-csv live_arc_qwen38_task_results.csv \
@@ -97,7 +97,8 @@ task (one MAP-Elites grid per task). Each generation:
 ```bash
 uv run python scripts/live_arc_run.py --mode archive \
     --model Qwen/Qwen3.8-27B --archetype "ARC Code-First Solver" \
-    --thinking on --thinking-budget 4096 --max-tokens 10000 --concurrency 16 \
+    --thinking on --thinking-budget 4096 --max-tokens 10000 --concurrency 22 \
+    --repair-thinking-budget 2048 --repair-reasoning-effort low \
     --rpm 0 --tpm 0 --delay 0 --generations 20 \
     --islands 4 --tasks-per-child 30 --max-temperature 0.7 --token-cap 25000000 \
     --state live_arc_state.json --program-csv live_arc_program_results.csv \
@@ -108,6 +109,9 @@ uv run python scripts/live_arc_run.py --mode archive \
   islands × tasks-per-child calls plus one mutation call per island.
 - **Checkpoint:** `--state` is rewritten after every generation. Add `--resume` to continue from it.
 - **Program CSV:** one row per program, with its cell, scores, tokens and `finish_reason`.
+- **Repair calls think less:** a repair prompt already shows the failing demonstrations, so repair calls get
+  `--repair-thinking-budget 2048` and Qwen3.8's `reasoning_effort: low` (sent in `chat_template_kwargs`; both
+  are the defaults). Fresh attempts keep `--thinking-budget` and the model's default effort (xhigh).
 
 ### Why these flags
 
@@ -116,7 +120,7 @@ uv run python scripts/live_arc_run.py --mode archive \
 | `--archetype "ARC Code-First Solver"` | Seed prompt that asks for one ```` ```python ```` block and keeps reasoning in comments. With the default seed, Qwen writes pages of analysis and hits the token cap before any code: 11% of programs ran, against 89% code-first. |
 | `--thinking on --thinking-budget 4096` | A private reasoning pass. vLLM ends the thinking block after 4096 tokens (`thinking_token_budget`, enabled by `--reasoning-config` in the deploy) by inserting Qwen's official early-stop text, "Considering the limited time by the user, I have to give the solution based on the thinking directly now." followed by `</think>`. `--thinking off` turns it off; `server` sends nothing. |
 | `--max-tokens 10000` | Floor on every call's `max_tokens` (the default for this provider): 4096 thinking + about 6k for the code. The first Qwen3.8 run used 1024 thinking tokens and solved 0-2 of 120 tasks per generation. 3000 was too small for Qwen on ARC; 6000 was used for the measured run below. |
-| `--concurrency 16` | Tasks in flight at once (the default for this provider, and the server's `--max-num-seqs`). 32 filled the KV cache and requests timed out; see troubleshooting. |
+| `--concurrency 22` | Tasks in flight at once (the default for this provider, and the server's `--max-num-seqs`). 32 filled the 16-bit KV cache and requests timed out (see troubleshooting); the FP8 KV cache (~385k tokens) has twice the room. Watch the KV-use line in the server log on the first generation. |
 | `--rpm 0 --tpm 0 --delay 0` | The defaults are sized for Groq's free tier and would serialize a parallel run. |
 | `--provider openai` / `--base-url` | Not needed when `OPENAI_BASE_URL` is set; the provider is picked from it. |
 
@@ -184,7 +188,7 @@ Revoke the proxy token when you are done: `modal workspace proxy-tokens list` fo
 |---|---|
 | Every call fails at once with 503 | No container is up (cold start). Wake the server first (section 2). |
 | A burst of `InternalServerError (attempt 1)` right after `modal deploy` | The old container drains while the new one starts. The retries succeed; you can ignore it. |
-| `APITimeoutError` / `APIConnectionError` at attempt 2+ | Requests waited more than the client's 600 s timeout. The KV cache was full (98%) at 32-way concurrency with 6000-token answers, so requests queued. The defaults are now 16; if it recurs, lower `--concurrency` further, lower `--max-tokens`, or deploy `QUANT=fp8` on 80 GB. |
+| `APITimeoutError` / `APIConnectionError` at attempt 2+ | Requests waited more than the client's 600 s timeout. The KV cache was full (98%) at 32-way concurrency with 6000-token answers, so requests queued. The defaults are now 22 with an FP8 KV cache; if it recurs, lower `--concurrency` further, lower `--max-tokens`, or deploy `QUANT=fp8` on 80 GB. |
 | Bursts of `InternalServerError` mid-run, a second container in `modal container list`, then `503 no upstreams available` | Modal autoscaling. With `target_concurrency=16`, the 17th request scaled up a second A100, and the scale-down after it aborted in-flight requests. The deploy now runs one container (no `target_concurrency`) and drains for up to 10 minutes. |
 | 500s then `503 no upstreams available` right as a new generation starts | The container scaled down while the client was scoring the previous generation (~2.5 min with no requests). The scale-down window is now 4 minutes; it was 150 s. Continue the stopped run with `--resume` (section 6). |
 | `arc_runs_successfully` near 0 | Answers truncated before the code (`finish_reason=length`). Use the code-first archetype, a thinking budget, and enough `--max-tokens`. |

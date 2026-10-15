@@ -1,5 +1,6 @@
 """Program-archive mode: per-task MAP-Elites archive, TPE with an archived-performance prior, UCB1 over tasks,
 repair calls, held-out pass@2 from archive picks, and the JSON checkpoint. Offline: a scripted client."""
+import contextlib
 import os
 import random
 import sys
@@ -34,6 +35,28 @@ class RepairOnlyClient(GroqLLMClient):
             self.prompts.append(user_prompt)
             if "Current program:" not in user_prompt:
                 return IDENTITY
+        return super().generate(system_prompt, user_prompt, temperature, top_p, max_tokens)
+
+
+class OptionsRecordingClient(RepairOnlyClient):
+    """Also records which call_options were active for each ARC call (fresh or repair)."""
+
+    def __init__(self):
+        super().__init__()
+        self.active = {}
+        self.calls = []
+
+    @contextlib.contextmanager
+    def call_options(self, **options):
+        self.active = options
+        try:
+            yield
+        finally:
+            self.active = {}
+
+    def generate(self, system_prompt, user_prompt, temperature=0.7, top_p=0.95, max_tokens=1024):
+        if "ARC-AGI task" in user_prompt:
+            self.calls.append(("Current program:" in user_prompt, dict(self.active)))
         return super().generate(system_prompt, user_prompt, temperature, top_p, max_tokens)
 
 
@@ -168,6 +191,18 @@ class TestProgramArchiveMode(unittest.TestCase):
         children = [rec for rec in ctrl.history_records if rec["generation"] > 0]
         self.assertTrue(children)
         self.assertTrue(all(rec["island"] in (0, 1) for rec in children))
+
+    def test_repair_calls_get_repair_options_and_fresh_calls_do_not(self):
+        client = OptionsRecordingClient()  # sequential (max_concurrency=1), so `active` is unambiguous
+        options = {"thinking_budget": 2048, "reasoning_effort": "low"}
+        ctrl = make_controller(client, repair_call_options=options)
+        for _ in range(3):
+            ctrl.run_generation()
+        repairs = [opts for is_repair, opts in client.calls if is_repair]
+        fresh = [opts for is_repair, opts in client.calls if not is_repair]
+        self.assertTrue(repairs and fresh)
+        self.assertTrue(all(opts == options for opts in repairs))
+        self.assertTrue(all(opts == {} for opts in fresh))
 
     def test_checkpoint_written_after_seed_and_each_generation_and_resumes(self):
         with tempfile.TemporaryDirectory() as tmp:

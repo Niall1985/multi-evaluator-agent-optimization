@@ -1,3 +1,4 @@
+import contextlib
 import json
 import os
 import random
@@ -59,6 +60,7 @@ class EvolutionController:
         migration_interval: int = 5,
         knob_bounds: Optional[Dict[str, Tuple[float, float]]] = None,
         state_path: Optional[str] = None,
+        repair_call_options: Optional[Dict[str, Any]] = None,
     ):
         self.api_key = api_key
         self.model = model
@@ -83,6 +85,10 @@ class EvolutionController:
         # Program-archive mode: checkpoint written after the seed and after every generation (save_state), so a
         # crash loses at most the generation in progress; load_state resumes from it.
         self.state_path = state_path
+        # Program-archive mode: client call options for repair calls only (e.g. {"thinking_budget": 2048,
+        # "reasoning_effort": "low"}). A repair prompt already shows the failing demonstrations, so it needs less
+        # thinking than a fresh attempt. Used when the client has call_options (the OpenAI-compatible one).
+        self.repair_call_options: Dict[str, Any] = dict(repair_call_options or {})
         # Spec §3.3's W: fANOVA is measured every W generations and prunes after W consecutive low windows
         self.fanova_window = max(1, fanova_window)
         self.csv_filepath = "optimization_results.csv"
@@ -678,17 +684,21 @@ class EvolutionController:
 
         return inspect_program, build_repair_prompt
 
-    def _call_agent(self, agent: Agent, user_prompt: str) -> Dict[str, Any]:
-        """One LLM call with the agent's system prompt and knobs; keeps the call's usage when the client has it."""
+    def _call_agent(self, agent: Agent, user_prompt: str, options: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """One LLM call with the agent's system prompt and knobs; keeps the call's usage when the client has it.
+        `options` go to the client's call_options (per-call thinking settings), if it has them."""
         knobs = agent.harness_knobs
+        call_options = getattr(self.llm_client, "call_options", None)
+        scope = call_options(**options) if options and call_options else contextlib.nullcontext()
         start = time.time()
-        solution = self.llm_client.generate(
-            system_prompt=agent.system_prompt,
-            user_prompt=user_prompt,
-            temperature=knobs.temperature,
-            top_p=knobs.top_p,
-            max_tokens=knobs.max_tokens,
-        )
+        with scope:
+            solution = self.llm_client.generate(
+                system_prompt=agent.system_prompt,
+                user_prompt=user_prompt,
+                temperature=knobs.temperature,
+                top_p=knobs.top_p,
+                max_tokens=knobs.max_tokens,
+            )
         info_fn = getattr(self.llm_client, "last_call_info", None)
         return {"solution": solution, "latency_ms": (time.time() - start) * 1000, "usage": info_fn() if info_fn else {}}
 
@@ -886,7 +896,11 @@ class EvolutionController:
                     [p.solution for p in inspirations],
                 )
                 jobs.append({"plan": plan, "task_id": tid, "parent_prog": parent_prog, "prompt": prompt})
-        results = self._map_tasks(lambda j: self._call_agent(j["plan"]["child"], j["prompt"]), jobs)
+        results = self._map_tasks(
+            lambda j: self._call_agent(j["plan"]["child"], j["prompt"],
+                                       self.repair_call_options if j["parent_prog"] else None),
+            jobs,
+        )
         for job, result in zip(jobs, results):
             job["result"] = result
 

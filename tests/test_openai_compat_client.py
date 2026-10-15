@@ -103,6 +103,30 @@ class TestOpenAICompatClient(unittest.TestCase):
         finally:
             server.close()
 
+    def test_call_options_override_thinking_on_this_thread_only(self):
+        server = StubServer([])
+        try:
+            c = self.client(server, enable_thinking=True, thinking_budget=4096)
+            with c.call_options(thinking_budget=2048, reasoning_effort="low"):
+                c.generate("s", "u")
+                other = threading.Thread(target=c.generate, args=("s", "u"))
+                other.start()
+                other.join()
+            c.generate("s", "u")
+            inside, other_thread, after = server.requests
+            self.assertEqual(inside["chat_template_kwargs"], {"enable_thinking": True, "reasoning_effort": "low"})
+            self.assertEqual(inside["thinking_token_budget"], 2048)
+            for req in (other_thread, after):
+                self.assertEqual(req["chat_template_kwargs"], {"enable_thinking": True})
+                self.assertEqual(req["thinking_token_budget"], 4096)
+            off = self.client(server, enable_thinking=False)
+            with off.call_options(thinking_budget=2048, reasoning_effort="low"):
+                off.generate("s", "u")  # thinking off: nothing thinking-related is sent
+            self.assertEqual(server.requests[-1]["chat_template_kwargs"], {"enable_thinking": False})
+            self.assertNotIn("thinking_token_budget", server.requests[-1])
+        finally:
+            server.close()
+
     def test_retries_503_loading_then_succeeds(self):
         loading = (503, {"error": {"code": 503, "message": "Loading model", "type": "unavailable_error"}})
         server = StubServer([loading, (429, {"error": {"message": "busy"}}), (200, _completion("done"))])

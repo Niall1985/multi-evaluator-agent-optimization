@@ -25,7 +25,7 @@ Local / OpenAI-compatible server (llama.cpp `llama-server`, vLLM, Ollama) instea
     uv run python scripts/live_arc_run.py --base-url http://localhost:8080/v1 --model local --rpm 0 --tpm 0 --delay 0
 
 That uses core/openai_compat_client.py: `--rpm` cap + exponential backoff only (TPM and reasoning-effort
-handling are Groq-only). Thinking is off by default (--thinking), 16 tasks run at once (--concurrency) and every call may use
+handling are Groq-only). Thinking is off by default (--thinking), 22 tasks run at once (--concurrency) and every call may use
 10000 tokens (--max-tokens); deploy/modal_vllm.py serves Qwen3.8-27B on Modal with a matching batch size. OPENAI_BASE_URL / OPENAI_API_KEY in .env work too, as does LLM_PROVIDER=openai.
 
 Reads GROQ_API_KEY from .env (falls back to the deterministic mock if unset). Two CSVs are
@@ -224,7 +224,7 @@ def main() -> None:
                         help="openai provider with --thinking on: max reasoning tokens per call (vLLM "
                              "thinking_token_budget; the server needs --reasoning-config). 0 = no limit")
     parser.add_argument("--concurrency", type=int, default=None,
-                        help="tasks in flight at once per run (default: 16 for the openai provider, 1 for groq). "
+                        help="tasks in flight at once per run (default: 22 for the openai provider, 1 for groq). "
                              "Match the server's batch size, e.g. vLLM --max-num-seqs")
     parser.add_argument("--archetype", default="General Balanced Assistant")
     parser.add_argument("--deep-threshold", type=float, default=0.65,
@@ -247,6 +247,12 @@ def main() -> None:
                         help="agent: one child per generation scored on every task (the original loop). archive: "
                              "program-archive mode - every program kept per task, one child per island working on "
                              "UCB1-picked tasks, repairing archived programs; selection uses demonstration pairs only")
+    parser.add_argument("--repair-thinking-budget", type=int, default=2048,
+                        help="archive mode, --thinking on: thinking budget for repair calls (fresh attempts keep "
+                             "--thinking-budget). 0 = same as --thinking-budget")
+    parser.add_argument("--repair-reasoning-effort", default="low", choices=["xhigh", "medium", "low", "none"],
+                        help="archive mode, --thinking on: Qwen3.8 reasoning_effort for repair calls "
+                             "(chat_template_kwargs; fresh attempts use the model default, xhigh). none = send nothing")
     parser.add_argument("--islands", type=int, default=4, help="archive mode: islands = children per generation")
     parser.add_argument("--tasks-per-child", type=int, default=30,
                         help="archive mode: tasks each child works on per generation (calls/gen = islands x this + "
@@ -290,7 +296,7 @@ def main() -> None:
         min_max_tokens=args.max_tokens,
         enable_thinking={"on": True, "off": False}.get(args.thinking) if provider == "openai" else None,
         thinking_budget=(args.thinking_budget or None) if provider == "openai" else None,
-        max_concurrency=args.concurrency or (16 if provider == "openai" else 1),
+        max_concurrency=args.concurrency or (22 if provider == "openai" else 1),
         metric_smoothing={"arc_pass_at_2_test": args.held_out_smoothing},
         evaluate_seed=not args.resume,
     )
@@ -361,6 +367,12 @@ def main() -> None:
 
 
 def run_archive(args, provider: str) -> None:
+    repair_options = {}
+    if provider == "openai" and args.thinking == "on":
+        if args.repair_thinking_budget:
+            repair_options["thinking_budget"] = args.repair_thinking_budget
+        if args.repair_reasoning_effort != "none":
+            repair_options["reasoning_effort"] = args.repair_reasoning_effort
     """Program-archive mode (EvolutionController evolution_mode="program_archive").
 
     The evaluator pool leaves out arc_pass_at_2_test, so no prompt and no selection decision sees a held-out
@@ -380,13 +392,14 @@ def run_archive(args, provider: str) -> None:
         min_max_tokens=args.max_tokens,
         enable_thinking={"on": True, "off": False}.get(args.thinking) if provider == "openai" else None,
         thinking_budget=(args.thinking_budget or None) if provider == "openai" else None,
-        max_concurrency=args.concurrency or (16 if provider == "openai" else 1),
+        max_concurrency=args.concurrency or (22 if provider == "openai" else 1),
         evaluate_seed=not args.resume,
         evolution_mode="program_archive",
         n_islands=args.islands,
         tasks_per_child=args.tasks_per_child,
         knob_bounds={"temperature": (0.1, args.max_temperature), "top_p": (0.6, 1.0)},
         state_path=args.state,
+        repair_call_options=repair_options,
     )
     ctrl.csv_filepath = args.csv
     ctrl.sampler.deep_tier_threshold = args.deep_threshold
@@ -395,6 +408,7 @@ def run_archive(args, provider: str) -> None:
     print("provider:", provider, getattr(client, "base_url", "") or "", "| mock mode:", client.is_mock,
           "| model:", client.model, f"| max_tokens>={args.max_tokens} | concurrency: {ctrl.max_concurrency}",
           f"| thinking: {args.thinking}" + (f" (budget {args.thinking_budget})" if args.thinking_budget else ""),
+          f"| repair calls: {repair_options or 'same as fresh'}",
           f"| mode: archive islands={args.islands} tasks/child={args.tasks_per_child} "
           f"T<={args.max_temperature} | evaluators: {ctrl.metric_names}", flush=True)
 
