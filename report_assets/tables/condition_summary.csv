@@ -1,6 +1,6 @@
 condition,label,n_runs,mean_peak_fitness,std_peak_fitness,mean_peak_fitness_normalised,mean_active_weight_mass,mean_peak_correctness,mean_cost_usd,mean_naive_cost_usd,mean_cost_saved_pct,mean_active_evaluators
-single_metric,C1 Single-metric,26,0.8762,0.1303,0.8754,1.0001,0.6577,0.066,1.116,94.09,1.161
-static_cascade,C2 Static cascade,26,0.8561,0.1101,0.9814,0.6924,0.6577,0.76208,1.116,31.71,4.146
-ucb1_bandit,C3 UCB1 bandit,26,0.8558,0.1107,0.8541,1.002,0.6577,1.116,1.116,0.0,6.0
-no_pruning,C4 No pruning,26,0.9618,0.0245,0.9622,1.0,0.6577,1.116,1.116,0.0,6.0
-full_adaptive,C5 Full adaptive,26,0.9412,0.0389,0.9961,0.6697,0.6577,0.71119,1.116,36.27,3.943
+single_metric,C1 Single-metric,12,0.798,0.2506,0.7978,1.0003,0.7833,0.042,0.252,83.33,1.714
+static_cascade,C2 Static cascade,12,0.6545,0.1532,0.7374,0.6859,0.7833,0.11583,0.252,54.03,4.107
+ucb1_bandit,C3 UCB1 bandit,12,0.6704,0.1541,0.6691,1.002,0.7833,0.252,0.252,0.0,6.0
+no_pruning,C4 No pruning,12,0.8231,0.139,0.8234,1.0002,0.8,0.252,0.252,0.0,6.0
+full_adaptive,C5 Full adaptive,12,0.744,0.1617,0.8077,0.74,0.7833,0.12208,0.252,51.55,4.274

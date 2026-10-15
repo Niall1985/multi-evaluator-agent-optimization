@@ -707,6 +707,17 @@ def main() -> None:
     data["metric_profile"] = fig_metric_profile(mock, os.path.join(figdir, "fig_metric_profile.png"))
     data["mutation_usage"] = fig_mutation_usage(mock, os.path.join(figdir, "fig_mutation_usage.png"))
 
+    # ---- ARC-AGI experiment (separate run, separate evaluator suite)
+    try:
+        from arc_analysis import build_arc_assets
+        data["arc"] = build_arc_assets(args.outdir)
+        a = data["arc"]
+        print(f"  ARC: {a['official_final_n']}/{a['n_tasks']} tasks solved "
+              f"({a['official_final_pct']:.1f}%), {a['n_programs']} programs")
+    except SystemExit as e:
+        print(f"  ! ARC assets skipped: {e}")
+        data["arc"] = None
+
     if live_runs is not None and not live_runs.empty:
         live_cond = condition_summary(live_runs)
         live_cond.to_csv(os.path.join(tabdir, "live_condition_summary.csv"), index=False)

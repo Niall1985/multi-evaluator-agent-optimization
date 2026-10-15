@@ -188,6 +188,20 @@ def front_matter(b, C):
         f"outputs were produced by the model and candidate solutions were executed in a sandbox "
         f"against each task's test cases, with no simulated response admitted to the dataset."
     )
+    arc = d.get("arc")
+    if arc:
+        b.body(
+            f"A second experiment applied the framework to the ARC-AGI benchmark, on which current "
+            f"language models score in the low single digits. Running a program archive over "
+            f"{arc['n_tasks']} held-out tasks for {arc['generations']} generations, the official "
+            f"pass@2 score rose from {arc['official_start_pct']:.1f} per cent to "
+            f"{arc['official_final_pct']:.1f} per cent, a fourfold improvement measured on held-out "
+            f"grids that never entered the fitness signal, while the number of tasks whose "
+            f"demonstration pairs were fitted grew from {arc['demos_start']} to "
+            f"{arc['demos_final']}. The gap between those two counts is reported as a finding in "
+            f"its own right: {arc['generalisation_gap']} programs reproduced every demonstration "
+            f"without capturing the underlying rule."
+        )
     b.body(
         "The report also documents the limits of the study candidly. The optimization horizon is "
         f"short, at {ds['generations_per_run']} generations per run, so the convergence evidence "
@@ -506,6 +520,20 @@ def chapter1(b):
         f"functional correctness, execution latency, output conciseness, reasoning quality, edge-case "
         f"robustness and safety, of which the third and sixth are assessed by an LLM judge."
     )
+    arc = d.get("arc")
+    if arc:
+        b.body(
+            f"A second benchmark is used for a separate purpose. The canonical suite is one on "
+            f"which a competent model already succeeds much of the time, which makes it suitable "
+            f"for measuring the cost of evaluation but unsuitable for measuring whether the search "
+            f"improves capability, since there is little headroom to improve. The ARC-AGI "
+            f"benchmark supplies that headroom: its tasks are abstract grid transformations that "
+            f"must be inferred from a few demonstration pairs, current language models solve them "
+            f"at rates in the low single digits, and scoring is pixel-exact. "
+            f"{arc['n_tasks']} of its held-out tasks are used, with a distinct evaluator suite "
+            f"described in Section 5.3.6 and a program-archive search mode described in "
+            f"Section 4.8."
+        )
     b.body(
         "The project does not fine-tune or otherwise modify model weights; the underlying language "
         "model is treated as a fixed, hosted resource accessed over an API. It does not address "
@@ -1067,14 +1095,57 @@ def chapter4(b):
         "Chapter 6; no reported statistic depends on in-memory state."
     )
 
-    b.section_heading("4.8", "Summary")
+    b.section_heading("4.8", "A second search mode: the program archive")
+    b.body(
+        "The architecture described so far evolves one agent per generation and scores it on every "
+        "task. That is the mode used for the ablation of Chapter 6, and it suits a suite of a dozen "
+        "tasks on which a competent model already succeeds much of the time. It suits the ARC-AGI "
+        "benchmark far less well, for two reasons: a single agent prompt must serve a hundred and "
+        "twenty unrelated puzzles, and a candidate that fails is discarded along with whatever "
+        "partial insight it contained. A second mode was therefore added, which keeps the "
+        "evaluation machinery of Sections 4.4.3 to 4.4.8 unchanged and replaces only the unit of "
+        "selection."
+    )
+    b.body(
+        "In program-archive mode the object under evolution is a program for a particular task "
+        "rather than a prompt for all of them. Four differences follow from that change."
+    )
+    b.bullets([
+        "The archive becomes a grid per task rather than a single population. A program's cell "
+        "coordinate is the pattern of demonstration pairs it passes together with how many of its "
+        "outputs have the correct shape, which is a behavioural descriptor rather than a quality "
+        "score. Two programs that solve different pairs therefore both survive, where a "
+        "fitness-ranked population would have kept only the higher-scoring one. This is the "
+        "MAP-Elites principle of Section 4.4.7 applied to programs instead of to metrics.",
+        "Candidates are produced by repair as well as by mutation. A repair call is given an "
+        "archived program together with the demonstration pairs it currently fails, and asked for "
+        "a revision; this is what lets partial progress accumulate across generations instead of "
+        "being rediscovered each time.",
+        "Effort is allocated by a bandit over tasks. A UCB1 selector chooses which tasks each child "
+        "works on, so attention concentrates on tasks that are neither solved nor hopeless, and a "
+        "task whose demonstrations are fully fitted leaves the pool entirely.",
+        "The population is divided into islands which evolve independently and exchange members at "
+        "a fixed interval, so that several lines of attack on the same task can develop in "
+        "parallel without immediately displacing one another.",
+    ])
+    b.body(
+        "The parent of each new program is chosen by a Tree-structured Parzen Estimator over the "
+        "archived candidates, which is used in preference to the Gaussian process of Section 4.4.4 "
+        "because the candidate set changes every generation as programs enter and leave the "
+        "archive, and a Gaussian process over a fixed design space cannot represent that. The "
+        "weight vector over evaluators is still proposed by the Gaussian process, unchanged."
+    )
+
+    b.section_heading("4.9", "Summary")
     b.body(
         "The design couples an evolutionary outer loop over agent configurations with an inner "
         "Bayesian optimization over the evaluation process. The cascade decides what to pay for, the "
         "Gaussian process decides how to weight what was measured, the cost penalty makes that "
         "expenditure visible to the objective, functional ANOVA identifies what has stopped "
         "informing the search, and the elite archive with epsilon-probing ensures that what is no "
-        "longer measured is nonetheless audited."
+        "longer measured is nonetheless audited. The program-archive mode of Section 4.8 reuses all "
+        "of that machinery and changes only what is being selected, which is why the two "
+        "experiments of Chapter 6 can share an implementation while answering different questions."
     )
     b.page_break()
 
@@ -1184,6 +1255,42 @@ def chapter5(b):
         "Chapter 6 were executed with the real neural model installed."
     )
 
+    b.subsection_heading("5.3.6", "The ARC-AGI benchmark module and its evaluator suite")
+    b.body(
+        "The ARC benchmark is implemented as a self-contained package that adapts the published "
+        "task format to the project's task abstraction. Each ARC task supplies a handful of "
+        "demonstration pairs and one or more held-out inputs; the demonstration pairs become the "
+        "task's test cases and so drive the correctness signal, while the held-out pairs are kept "
+        "separate and are used only for out-of-band reporting. Grids are normalized to lists of "
+        "integers before comparison, so a program may return either a nested list or a numpy array "
+        "without affecting its score."
+    )
+    b.body(
+        "The suite registers six evaluators, and the distinction between them is a matter of "
+        "research integrity rather than implementation convenience. Three compute the official ARC "
+        "quantities: whether the program executes and exposes the expected entry point, pass@2 over "
+        "the demonstration pairs, and pass@2 over the held-out pairs. The other three, which score "
+        "pixel accuracy, shape agreement and colour-histogram overlap, were written for this "
+        "project to give the weighted fitness a usable gradient before any candidate reaches an "
+        "exact match."
+    )
+    b.body(
+        "Those three are not ARC metrics and must never be reported as ARC results. The module "
+        "enforces this rather than relying on the reader: they are defined in a separate file "
+        "carrying a header that states their provenance, every result object they produce is "
+        "flagged as AI-generated in its details, and the figures in Section 6.8.5 draw them with a "
+        "distinct line style and mark them in the caption. The precaution matters because the "
+        "partial-credit scores are numerically much larger than the real ones on a benchmark where "
+        "most candidates fail outright, so an unmarked average over all six would look like strong "
+        "performance while meaning nothing."
+    )
+    b.body(
+        "Every ARC evaluator is registered in the core tier at zero cost, because each one merely "
+        "executes a candidate program on grids and none calls a language model. This is why the "
+        "selective-evaluation machinery is inert on ARC, as Section 6.8.1 explains, and it is a "
+        "property of the benchmark rather than a configuration choice."
+    )
+
     b.section_heading("5.4", "Service and user interfaces")
     b.table(
         ["Endpoint", "Purpose"],
@@ -1254,11 +1361,17 @@ def chapter6(b):
 
     b.section_heading("6.1", "Introduction")
     b.body(
-        "This chapter reports the empirical evaluation of the framework. It first states the "
-        "experimental methodology, including an explicit account of the two execution modes used "
-        "and why both were necessary. It then presents convergence behaviour, evaluation cost, the "
-        "statistical comparison between conditions, and the behaviour of the individual mechanisms. "
-        "It closes with a discussion of what the evidence does and does not support."
+        "This chapter reports the empirical evaluation of the framework, which rests on two "
+        "experiments executed against live language models. The first is a controlled "
+        "five-condition ablation on the twelve-task canonical suite, where two of the six evaluator "
+        "dimensions are language model judges and therefore carry a cost; it is the evidence for "
+        "how the adaptive cascade behaves when evaluation is expensive. The second is a run on the "
+        "ARC-AGI benchmark, where every evaluator is free but the tasks are hard enough that "
+        "current models solve them in the low single digits; it is the evidence that the search "
+        "finds solving programs at all. The two use different evaluator suites, different search "
+        "modes and different models, so they answer different questions and neither corroborates "
+        "the other. Sections 6.2 to 6.7 cover the ablation, Section 6.8 the ARC experiment, and the "
+        "chapter closes with what the combined evidence does and does not support."
     )
 
     b.section_heading("6.2", "Experimental methodology")
@@ -1367,10 +1480,13 @@ def chapter6(b):
         "the conditions separate immediately and the ordering is stable thereafter, which reflects "
         "the fact that the dominant term in the fitness is the cost penalty and the weighting "
         "scheme, both of which are determined by the condition rather than discovered during the "
-        "run. Second, the curves are close to flat after the first few generations. In simulation "
-        "this is the expected consequence of the caveat in Section 6.2.3: because the agent's output "
-        "does not change in response to its evolved prompt, there is no capability improvement for "
-        "the search to find, and what remains is the fixed structural difference between conditions."
+        "run. Second, the curves flatten after the first few generations. The horizon is the likely "
+        "explanation: six generations is a short budget in which to separate conditions whose "
+        "differences are structural, and the per-generation improvement a prompt mutation can "
+        "deliver is small beside the fixed gap the weighting scheme imposes at generation one. The "
+        "ARC experiment of Section 6.8, which runs a comparable number of generations but with many "
+        "more candidates per generation, shows continuing improvement over the same horizon, which "
+        "suggests the limit here is the number of candidates rather than the number of generations."
     )
 
     b.section_heading("6.4", "Cost of evaluation")
@@ -1526,13 +1642,14 @@ def chapter6(b):
             b.body(
                 f"Functional correctness is identical across all five conditions, at a mean peak of "
                 f"{corr[0]['mean_treatment']:.4f} in every case, and every paired difference is "
-                f"exactly zero. This is not a null result to be explained away; it is the caveat of "
-                f"Section 6.2.3 appearing directly in the data. In simulation the response returned "
-                f"for a given task does not depend on the evolved prompt, so the correctness "
-                f"dimension cannot vary with the optimization condition, and no configuration of "
-                f"the optimizer can move it. It follows that the simulation results speak only to "
-                f"the cost and weighting behaviour of the evaluation machinery, and that any claim "
-                f"about agent capability must rest on the live study of Section 6.8."
+                f"exactly zero. Since every generation was executed against the live model, this "
+                f"is a genuine null result rather than an artefact: over six generations the "
+                f"optimization condition did not move functional correctness on this suite. The "
+                f"most likely reason is that peak correctness is attained early, often by the seed "
+                f"agent itself, leaving no headroom for the condition to act on within the horizon. "
+                f"It follows that the ablation supports claims about the cost and weighting "
+                f"behaviour of the evaluation machinery, and that the evidence for capability "
+                f"improvement rests on the ARC experiment of Section 6.8."
             )
         else:
             rows = [[r["comparison"].replace("full_adaptive", "C5"), r["n_pairs"],
@@ -1588,18 +1705,26 @@ def chapter6(b):
             f"ordinary sampling variation."
         )
         b.body(
-            "This is correct behaviour for UCB1 rather than a defect, and it follows from the "
-            "caveat of Section 6.2.3. The reward signal supplied to the bandit is the fitness "
-            "improvement an operator produces. In simulation the agent's output does not depend on "
-            "the evolved prompt, so no operator produces a systematically larger improvement than "
-            "any other, and the arms are statistically indistinguishable. When the estimated means "
-            "coincide, the exploration term of the UCB1 index, which grows as the square root of "
-            "the logarithm of the trial count divided by the pull count, is the only term that "
-            "separates the arms, and the policy degenerates to round-robin selection. The perfectly "
-            "flat distribution is therefore evidence that the bandit is implemented correctly and "
-            "that the simulation provides it with nothing to learn from. Establishing whether the "
-            "bandit discovers genuinely better operators requires the live setting, at a scale this "
-            "project's API quota did not permit."
+            "This is an artefact of the experiment's horizon rather than a property of the policy, "
+            "and the arithmetic is exact. UCB1 begins by playing each arm once, because its index "
+            "is undefined for an arm with no observations. There are six mutation operators and "
+            "each cell of the design runs six generations, so a cell affords exactly one pull of "
+            "each arm and the run ends at the moment the initialization completes. Twelve cells "
+            "therefore produce precisely twelve pulls of every arm, which is what the data shows, "
+            "and the policy never reaches the phase in which the estimated means influence the "
+            "choice at all."
+        )
+        b.body(
+            "The consequence is that this ablation cannot speak to whether the bandit identifies "
+            "better operators: the condition labelled C3 differs from uniform random selection in "
+            "implementation but not, at this horizon, in behaviour. The comparison in the figure is "
+            "still worth reporting, because a reader would otherwise read the flat distribution as "
+            "evidence that the operators are equivalent. A run of at least three or four times the "
+            "number of generations per cell is the minimum needed for the question to be asked at "
+            "all, and Section 7.2 records it as such. On ARC, where the same bandit machinery "
+            "selects tasks rather than operators and is given many more pulls per generation, the "
+            "selector does leave initialization, which is visible in the falling attempted-task "
+            "counts of Section 6.8.3."
         )
     else:
         b.body(
@@ -1644,53 +1769,231 @@ def chapter6(b):
             "in that domain that no amount of prompt evolution can lift."
         )
 
-    b.section_heading("6.8", "Live validation study")
-    live_cond = d.get("live_condition_summary")
-    if live_cond:
-        lds = ds.get("live_generations")
+    b.section_heading("6.8", "A second benchmark: ARC-AGI")
+    arc = d.get("arc")
+    if not arc:
+        b.body("The ARC-AGI experiment was not available at build time.")
+    else:
+        def _num(v):
+            try:
+                return v if v == v else None      # NaN is the only value unequal to itself
+            except Exception:
+                return None
+
+        b.subsection_heading("6.8.1", "Motivation and what differs")
         b.body(
-            f"A separate study was executed against the live Groq-hosted model, within the daily "
-            f"request allowance. It comprised {ds.get('live_runs', 'several')} optimization runs and "
-            f"{lds} generations, each involving real model invocations for prompt mutation, agent "
-            f"execution and the two LLM-judged evaluator dimensions."
+            "The ablation of Sections 6.3 to 6.7 establishes how the adaptive cascade behaves on a "
+            "twelve-task suite where two of the six evaluator dimensions are themselves language "
+            "model judges and therefore carry a monetary cost. That design answers a question about "
+            "the cost of evaluation. It cannot answer a second question, which is whether "
+            "multi-evaluator weighted fitness actually finds solving programs on a problem that is "
+            "genuinely hard. A second experiment was therefore run on the ARC-AGI benchmark, whose "
+            "tasks are abstract grid transformations that must be inferred from a handful of "
+            "demonstration pairs, and on which current language models score in the low single "
+            "digits."
         )
-        rows = [[r["label"], r["n_runs"], f'{r["mean_peak_fitness"]:.4f}',
-                 f'{r["mean_peak_correctness"]:.4f}', f'{r["mean_cost_usd"]:.4f}',
-                 f'{r["mean_cost_saved_pct"]:.1f}%', f'{r["mean_active_evaluators"]:.2f}']
-                for r in live_cond]
+        b.body(
+            "Three differences from the first experiment must be stated before any number is "
+            "quoted, because they make the two experiments complementary rather than comparable."
+        )
+        b.bullets([
+            "The evaluator suite is different and, critically, free. Every ARC evaluator executes a "
+            "candidate program on grids; none calls a language model, so all are registered in the "
+            "core tier at zero cost. No strategy therefore has anything worth pruning, the cost "
+            "penalty term vanishes, and fitness reduces to the plain weighted sum. The cost result "
+            "of Section 6.4 has no analogue here and the cost telemetry from this run is not "
+            "meaningful.",
+            "The search operates on programs rather than on a single agent. In the ablation, one "
+            "child agent per generation is scored on every task. On ARC the controller runs in "
+            "program-archive mode: " + str(arc["children_per_generation"]) + " children evolve in "
+            "parallel on " + str(arc["islands"]) + " islands, each working on " +
+            str(arc["tasks_per_child"]) + " tasks chosen by a UCB1 bandit, and each either repairing "
+            "a program already held in that task's archive or writing one from scratch. The archive "
+            "is a MAP-Elites grid per task whose cell coordinate is the pattern of demonstration "
+            "pairs a program passes together with how many of its outputs have the correct shape, so "
+            "programs that succeed in different ways are all retained.",
+            "The model and serving infrastructure differ. The ablation used a hosted " +
+            ", ".join(d["provenance"]["models"]) + " endpoint; the ARC run used " + arc["model"] +
+            " served from a " + arc["provider"] + " deployment, which removed the daily token "
+            "ceiling that constrained the first experiment. Absolute scores are not transferable "
+            "between the two experiments in either direction.",
+        ])
+
+        b.subsection_heading("6.8.2", "Scoring, and a distinction that matters")
+        b.body(
+            "ARC scoring is strict. A predicted grid is correct only if it matches the expected grid "
+            "exactly: the same dimensions and every cell equal. Two attempts are permitted for each "
+            "held-out input, and a task is credited only when every one of its held-out inputs is "
+            "matched by one of those two attempts. This is the published rule and it is the figure "
+            "reported here as the official score."
+        )
+        b.body(
+            f"A second quantity is easily mistaken for it. Averaging the per-task scores gives "
+            f"partial credit to a task whose held-out inputs are only partly matched, and "
+            f"{arc['partial_tasks']} of the {arc['n_tasks']} tasks are in exactly that position. "
+            f"That average reads {arc['mean_final_pct']:.1f} per cent where the official score is "
+            f"{arc['official_final_pct']:.1f} per cent. The gap is small in absolute terms but it is "
+            "the difference between a quantity comparable with published ARC results and one that is "
+            "not, so both are plotted and only the strict figure supports the claims that follow."
+        )
+        b.body(
+            "One further property of the protocol deserves emphasis. The official held-out score is "
+            "computed out of band: it is not one of the evaluators in the pool, it never enters the "
+            "fitness, and it never influences which programs the archive keeps. Selection sees only "
+            "the demonstration pairs. The held-out grids are read solely to score the two attempts "
+            "the archive has already chosen, which makes the reported score a genuine measure of "
+            "generalization rather than a quantity the search has been optimizing against."
+        )
+
+        b.subsection_heading("6.8.3", "Result")
+        b.figure("fig_arc_progress.png",
+                 "ARC-AGI held-out pass@2 against generation, under the strict official rule and as "
+                 "a mean over held-out inputs, with the cumulative count of tasks whose "
+                 "demonstration pairs are fitted")
+        arc_fig = b.last_fig()
+        factor = arc["official_final_n"] / max(arc["official_start_n"], 1)
+        b.body(
+            f"Figure {arc_fig} shows the outcome over {arc['generations']} generations on "
+            f"{arc['n_tasks']} tasks. The official score rises from "
+            f"{arc['official_start_pct']:.1f} per cent at the seed ({arc['official_start_n']} of "
+            f"{arc['n_tasks']} tasks) to {arc['official_final_pct']:.1f} per cent "
+            f"({arc['official_final_n']} of {arc['n_tasks']}), a factor of {factor:.0f} over its "
+            "starting point. The rise is monotonic: no generation lost a task an earlier one had "
+            "solved, which is what the archive exists to guarantee, since a program that solves a "
+            "task holds its cell and cannot be displaced by a later candidate that does not."
+        )
+        b.body(
+            f"The right panel tracks the quantity the search can actually see. The number of tasks "
+            f"whose demonstration pairs are completely fitted grows from {arc['demos_start']} to "
+            f"{arc['demos_final']}. The archive accumulated {arc['n_programs']:,} programs across "
+            f"{arc['n_cells']} distinct behavioural cells, of which {arc['n_elites']} were holding a "
+            "cell when the run ended."
+        )
+        b.figure("fig_arc_archive.png",
+                 "Growth of the program archive, and the distribution of programs over the "
+                 "MAP-Elites cells that retain them")
+        b.body(
+            f"Figure {b.last_fig()} shows how that archive accumulated. The gap between programs "
+            f"written and programs holding a cell is the selection pressure: roughly one program in "
+            f"{arc['n_programs'] / max(arc['n_elites'], 1):.0f} survived as an elite, the rest "
+            "having been dominated by an incumbent occupying the same cell. The cell occupancy "
+            "distribution is heavily skewed towards the low-scoring cells, which is the expected "
+            "shape on a benchmark where most candidates fail every demonstration pair: those "
+            "programs all land in the same cell and compete there on the partial-credit metrics "
+            "alone."
+        )
+
+        rows = []
+        for r in arc["generation_table"]:
+            ts, op = _num(r.get("tasks_solved")), _num(r.get("official_pct"))
+            rows.append([str(int(r["generation"])), str(int(r["children"])),
+                         str(int(r["tasks_attempted"])), str(int(r["repairs"])),
+                         str(int(r["new_solves"])),
+                         "" if ts is None else str(int(ts)),
+                         "" if op is None else f"{op:.1f}%"])
         b.table(
-            ["Condition", "Runs", "Mean peak fitness", "Mean peak correctness", "Mean cost",
-             "Cost saved", "Mean evaluators"],
+            ["Gen", "Children", "Tasks attempted", "Repairs", "New fits", "Tasks solved",
+             "Official score"],
             rows,
-            "Live validation study against the hosted language model",
-            widths=[3.0, 1.2, 2.3, 2.5, 1.8, 1.8, 1.9],
+            "Per-generation summary of the ARC-AGI program-archive run",
+            widths=[1.0, 1.6, 2.4, 1.6, 1.6, 2.0, 2.3],
             font_size=9,
         )
-        b.figure("fig_live_vs_mock.png",
-                 "Simulation against live execution, for peak correctness and "
-                 "evaluation cost saved")
         b.body(
-            f"Figure {b.last_fig()} places the live measurements beside the corresponding "
-            f"simulation values. The "
-            "cost-saving behaviour transfers, which is expected because it is a property of the "
-            "cascade rather than of the model. Correctness differs, which is equally expected and is "
-            "the clearest illustration of why the simulation results cannot stand in for live "
-            "measurement: in simulation the canned response is either right or wrong by construction, "
-            "whereas the live model produces genuinely variable output whose correctness depends on "
-            "the task and on the evolved prompt."
+            "The attempted-task count falls across the run because a task whose demonstrations are "
+            "already fitted leaves the pool the UCB1 selector draws from, so effort concentrates on "
+            f"what remains unsolved. The repair column shows the mechanism carrying the search: "
+            f"{arc['repairs']:,} repair operations were performed, each handing the model an "
+            "archived program together with the demonstrations it fails and asking for a revision."
+        )
+
+        b.subsection_heading("6.8.4", "The generalization gap")
+        gap_pct = arc["generalisation_gap"] / max(arc["demos_final"], 1) * 100
+        b.body(
+            f"The two panels of Figure {arc_fig} do not end at the same number, and that difference "
+            f"is the most informative result of this experiment. {arc['demos_final']} tasks have "
+            f"programs fitting every demonstration pair, but only {arc['official_final_n']} of those "
+            f"programs also produce the correct held-out output. {arc['generalisation_gap']} "
+            f"programs, {gap_pct:.0f} per cent of those that fit, capture the demonstrations without "
+            "capturing the rule."
         )
         b.body(
-            "A practical observation from the live runs concerns latency. The latency dimension "
-            "scores substantially lower under live execution because a hosted model invocation takes "
-            "seconds whereas the simulator responds instantly. Since the latency dimension enters the "
-            "weighted fitness, absolute fitness values are not comparable between the two modes, and "
-            "only within-mode comparisons are meaningful."
+            "This is overfitting in its purest form, and on ARC it takes a specific character. With "
+            "typically three demonstration pairs available, a program can satisfy all of them by "
+            "encoding incidental properties of those particular grids rather than the transformation "
+            "they illustrate. The search cannot detect this, because the demonstration pairs are the "
+            "entire fitness signal; the held-out inputs are deliberately withheld from selection, "
+            "which is what makes the measurement honest but also what leaves the search blind to the "
+            "distinction. Narrowing this gap would be more valuable than increasing the number of "
+            "demonstration fits."
         )
-    else:
+
+        b.subsection_heading("6.8.5", "Evaluator behaviour")
+        b.figure("fig_arc_metrics.png",
+                 "Mean score of each in-loop ARC evaluator against generation. Dashed series are the "
+                 "AI-generated partial-credit heuristics, which are not ARC metrics")
         b.body(
-            "The live validation study was not completed in time for inclusion. The pipeline was "
-            "nonetheless confirmed to operate against the live endpoint, with full marks on "
-            "functional correctness for individual coding generations."
+            f"Figure {b.last_fig()} separates the evaluators into the two groups described in "
+            f"Section 6.8.1. The proportion of candidates that execute without raising ends at "
+            f"{arc['metrics']['arc_runs_successfully']:.2f}, having climbed through the middle "
+            "generations; this is the least interesting form of progress but a precondition for any "
+            "other. Pass@2 on the demonstration pairs, the only series here that is an ARC metric in "
+            f"its own right, improves to {arc['metrics']['arc_pass_at_2_train']:.3f}, and the "
+            "partial-credit heuristics all improve modestly."
+        )
+        b.body(
+            "The partial-credit series must be read with care, and this report marks them at every "
+            "appearance. Pixel accuracy, shape match and colour-palette agreement were written for "
+            "this project to give the weighted fitness a usable gradient before any candidate "
+            "reaches an exact match, which on a benchmark with single-digit solve rates is most of "
+            "the time. They are shaping terms, not measurements of ARC performance, and a rise in "
+            "them is not evidence of a rise in ARC score. The file defining them carries a header "
+            "saying so, and every result they produce is flagged in the telemetry."
+        )
+        b.figure("fig_arc_weights.png",
+                 "GP-UCB weight vector over the ARC evaluator simplex, generation by generation")
+        b.body(
+            f"Figure {b.last_fig()} shows the weight vector the Gaussian process proposed at each "
+            "generation. The behaviour differs strikingly from the smooth drift seen on the "
+            "canonical suite in Section 6.6.1: the weights swing between near-exclusive "
+            "concentration on one dimension and broad spreads across several, without settling. Two "
+            "readings are available and the data does not separate them. Either the acquisition "
+            "function is exploring a surface on which no weighting is durably better, which is "
+            f"plausible given that only {arc['generations']} generations were run over a "
+            "five-dimensional simplex, or the improvement signal is too noisy for the surrogate to "
+            "fit, which is equally plausible when most candidates score zero on the metric that "
+            "ultimately matters."
+        )
+        b.body(
+            "A direct consequence is that fitness values are not comparable between generations in "
+            "this experiment. Because the weight vector is resampled every generation, a generation "
+            "that happens to place its weight on an easily satisfied dimension records a high "
+            "fitness without any underlying improvement, and the fitness series duly swings without "
+            "trend. The held-out score and the count of demonstration fits are the quantities that "
+            "carry meaning here, and they are what Section 6.8.3 reports."
+        )
+
+        b.subsection_heading("6.8.6", "Cost of the run, and what it does not show")
+        total_tok = arc["prompt_tokens"] + arc["completion_tokens"]
+        b.body(
+            f"The run consumed {total_tok:,} tokens, {arc['prompt_tokens']:,} of them prompt and "
+            f"{arc['completion_tokens']:,} completion, of which {arc['reasoning_tokens']:,} were the "
+            f"model's hidden reasoning. {arc['truncated_pct']:.1f} per cent of calls terminated at "
+            "the token ceiling rather than at a natural stopping point, so a fraction of candidate "
+            "programs were truncated mid-definition and scored as failures to execute. That is a "
+            "loss of search efficiency rather than a measurement error, but it bounds how much of "
+            "the remaining gap is attributable to the method as opposed to the budget."
+        )
+        b.body(
+            "What this experiment establishes is that the archive-based search improves a genuine "
+            f"ARC score monotonically, by a factor of {factor:.0f} over its own seed, and that the "
+            "improvement survives a held-out test the search never saw. What it does not establish "
+            "is that the multi-evaluator weighting is the cause. No ablation was run on ARC: there "
+            "is a single configuration, with no comparison against a uniformly weighted or "
+            "single-metric variant of the same archive search. The result is therefore evidence that "
+            "the system works end to end on a hard benchmark, and not evidence for any particular "
+            "component of it. An ablation on ARC is the single most valuable extension of this work "
+            "and is listed first in Section 7.2."
         )
 
     b.section_heading("6.9", "Discussion")
@@ -1713,10 +2016,15 @@ def chapter6(b):
             f"evaluation and {c5['mean_peak_correctness']:.4f} under the cascade."
         )
         b.body(
-            "Taken together, the cascade attains at least the quality of exhaustive evaluation on "
-            "the comparable measures while executing roughly a third fewer evaluators and spending "
-            "roughly a third less. That is the result the framework was built to produce, and it is "
-            "the one the data supports."
+            "The honest reading of those numbers is that the cascade buys a large cost reduction "
+            "for a quality difference too small to detect. On normalized fitness it sits slightly "
+            "below exhaustive evaluation, and on correctness the two are indistinguishable; the "
+            "paired test over the twelve tasks does not separate them, so the sign of the "
+            "difference should not be over-read. What is not in doubt is the cost: roughly half the "
+            "expenditure and a third fewer evaluator invocations per generation. The claim the data "
+            "supports is therefore that adaptive evaluation is substantially cheaper at no "
+            "measurable cost in quality, which is a weaker claim than the framework was designed "
+            "to demonstrate but is the one the evidence carries."
         )
     b.body(
         "The interpretation is that the cascade succeeds at its stated purpose, which is to avoid "
@@ -1726,22 +2034,65 @@ def chapter6(b):
     )
     b.body(
         "The evidence for the remaining mechanisms is weaker and should be described as such. The "
-        "Gaussian process demonstrably moves the weight vector away from the uniform allocation, but "
-        "in simulation there is no genuine capability signal for it to track, so its value cannot be "
-        "established here. Functional ANOVA produces sensitivity indices and flags evaluators below "
+        "Gaussian process demonstrably moves the weight vector away from the uniform allocation, "
+        "and on ARC it moves it sharply between generations, but neither experiment isolates the "
+        "contribution of the weighting itself, so its value cannot be established here. "
+        "Functional ANOVA produces sensitivity indices and flags evaluators below "
         "the redundancy threshold, but with a fixed benchmark suite the identity of the redundant "
         "dimensions is largely a property of the suite. The elite archive and regression monitor "
         "operate as designed and record alerts, but a demonstration that they prevent a regression "
         "that would otherwise have occurred would require an adversarial setting that this study "
         "does not construct."
     )
+    arc = d.get("arc")
+    if arc:
+        b.body(
+            "The ARC experiment contributes a different kind of evidence, and the two should not "
+            "be merged. It shows the search improving a benchmark score that is pixel-exact, "
+            "measured on inputs withheld from selection, and hard enough that the seed configuration "
+            f"solved only {arc['official_start_n']} of {arc['n_tasks']} tasks. That the score rose "
+            "monotonically to four times its starting value is the clearest demonstration in this "
+            "report that the machinery does something useful rather than merely consistent. But the "
+            "ARC configuration disables the very mechanism the ablation measures, since all its "
+            "evaluators are free and nothing is worth pruning, so the two experiments are better "
+            "understood as covering disjoint parts of the claim than as reinforcing one another."
+        )
+        b.body(
+            "The generalization gap of Section 6.8.4 is, in the author's view, the most interesting "
+            "single observation in this chapter. Roughly half the programs that reproduced every "
+            "demonstration pair failed on the held-out input, which says that fitting the available "
+            "supervision and learning the intended rule are substantially different achievements on "
+            "this benchmark. It also bears on the framework's central premise: a multi-evaluator "
+            "objective is motivated by the belief that several imperfect signals constrain a "
+            "candidate better than one, and a gap of this size suggests the signals available here "
+            "were not sufficiently constraining. Whether adding an evaluator that penalizes "
+            "complexity, or one that rewards agreement between independently evolved programs, "
+            "would narrow it is an empirical question this work leaves open."
+        )
 
     b.section_heading("6.10", "Threats to validity")
     b.bullets([
-        "Simulation rather than live execution for the large-sample ablation. This is the principal "
-        "threat and is discussed in Section 6.2.3. Cross-condition differences characterize the "
-        "evaluation machinery, not agent capability, and the identical correctness scores of "
-        "Section 6.5.3 demonstrate the point directly.",
+        "A short optimization horizon. This is the principal threat. Six generations per cell is "
+        "enough to separate conditions on cost, which is a structural difference visible from the "
+        "first generation, but too short to separate them on capability. Two consequences are "
+        "visible directly in the data: the convergence curves of Section 6.3 flatten early, and "
+        "the UCB1 condition of Section 6.6.2 exhausts its budget on the initialization sweep "
+        "without ever reaching the phase where its estimates influence selection.",
+        "A single repetition per design cell. Each task and condition pair was run once, so the "
+        "per-task tests carry no within-cell variance estimate and the pooled analysis across "
+        "tasks is the only informative one. Seed variation is therefore unmeasured and could "
+        "account for differences of the size reported.",
+        "No ablation on ARC. The ARC experiment of Section 6.8 ran a single configuration, so it "
+        "evidences that the search works end to end on a hard benchmark but attributes nothing to "
+        "the multi-evaluator weighting, the archive or the task bandit individually.",
+        "Partial-credit evaluators inside the ARC fitness. Three of the ARC evaluators are "
+        "heuristics written for this project rather than ARC metrics. They shape the search and "
+        "therefore influence which programs survive, so the reported ARC score, although measured "
+        "strictly and out of band, was reached by a search guided in part by quantities that have "
+        "no standing in the benchmark.",
+        "A protocol change during the ARC run. The run was interrupted and resumed, and the "
+        "reasoning budget allocated to repair calls was raised at that point, so generations before "
+        "and after the resume were not produced under identical settings.",
         "A comparability defect in the raw objective, described in Section 6.5.1. Raw fitness "
         "cannot be compared across conditions that activate different evaluator subsets. The "
         "analysis corrects for this by normalizing, but the optimizer itself maximized the "
@@ -1759,8 +2110,10 @@ def chapter6(b):
         "A ceiling imposed by the sentiment classifier. Attainable correctness in that domain is "
         "bounded by a fixed pre-trained model that misclassifies contrastive and doubly negated "
         "constructions, independently of the optimizer.",
-        "Single underlying model. All live measurements use one hosted model family, so the results "
-        "do not speak to behaviour across models.",
+        "Two models, neither varied. The ablation used one hosted model family and the ARC "
+        "experiment a different, self-hosted one. Neither experiment varies the model within "
+        "itself, so no result here speaks to how behaviour transfers across models, and the two "
+        "experiments cannot be compared to each other on absolute scores.",
         "The bandit is exercised in one condition only, so the comparison of the full adaptive "
         "condition against the baselines does not isolate its contribution.",
     ])
@@ -1772,8 +2125,12 @@ def chapter6(b):
             f"The adaptive cascade reduced cumulative evaluation expenditure by "
             f"{_pct(cost['saved_pct'])} relative to exhaustive multi-metric evaluation, by executing "
             f"the expensive judged dimensions only on candidates that first cleared a cheap "
-            f"deterministic gate. On the normalized objective it outperformed every baseline, with "
-            f"{n_sig} of {len(pooled)} pooled comparisons significant at the five per cent level. "
+            f"deterministic gate. On the normalized objective, however, it separated from only "
+            f"{n_sig} of the {len(pooled)} baselines at the five per cent level, and it did not "
+            f"improve on unpruned evaluation; the defensible reading is that the cascade buys a "
+            f"large cost reduction at no measurable cost in quality, not that it produces better "
+            f"agents. Functional correctness was statistically indistinguishable across all five "
+            f"conditions, which is consistent with that reading. "
             f"Analysis also exposed a defect in the objective as implemented, namely that raw "
             f"fitness is not comparable across conditions that evaluate different subsets, which "
             f"had to be corrected before any comparison could be made and which is reported here "
@@ -1782,6 +2139,20 @@ def chapter6(b):
             f"as designed, but the present experimental design does not establish their individual "
             f"value, and the chapter states the reasons explicitly rather than inferring more than "
             f"the data supports."
+        )
+    arc = d.get("arc")
+    if arc:
+        b.body(
+            f"The ARC-AGI experiment answers the question the ablation cannot. Over "
+            f"{arc['generations']} generations on {arc['n_tasks']} tasks the official held-out "
+            f"pass@2 score rose from {arc['official_start_pct']:.1f} to "
+            f"{arc['official_final_pct']:.1f} per cent, monotonically, on grids that never entered "
+            f"the fitness signal, while the number of tasks fitting their demonstration pairs grew "
+            f"from {arc['demos_start']} to {arc['demos_final']}. That the two counts differ by "
+            f"{arc['generalisation_gap']} is itself a finding, and is reported as one. Because the "
+            f"ARC run used a single configuration, it establishes that the framework works end to "
+            f"end on a benchmark far harder than the canonical suite without attributing the "
+            f"improvement to any particular component of it."
         )
     b.page_break()
 
@@ -1859,19 +2230,45 @@ def chapter7(b):
         "Against the objectives stated in Section 1.5, the formulation, the cascade, the Bayesian "
         "weighting, the cost-aware objective, the redundancy detection, the archive and the "
         "implementation with its three interfaces were all delivered and are operational. The "
-        "evaluation objective was met in part: a controlled five-condition ablation with appropriate "
-        "non-parametric analysis was completed, and the pipeline was validated against a live model, "
-        "but the scale of the live study was constrained by API quota to a size that cannot carry "
-        "the main statistical argument. The claim this work can defend is about the cost behaviour "
-        "of adaptive evaluation; the claim it cannot yet defend is that the full framework produces "
-        "better agents than a simpler baseline on a live model."
+        "evaluation objective was met more fully than an earlier draft of this work could claim, "
+        "because both experiments were ultimately executed against live models with no simulated "
+        "response admitted to either dataset."
+    )
+    b.body(
+        "Two claims can now be defended and a third cannot. The first is that adaptive evaluation "
+        "reduces evaluation cost substantially without a measurable loss of quality: the cascade "
+        "spent roughly half of what exhaustive evaluation would have spent, and functional "
+        "correctness was statistically indistinguishable across the conditions. The second is that "
+        "the archive-based search improves a genuine, held-out ARC-AGI score, monotonically and by "
+        "a factor of four over its own seed, on a test the search never observed."
+    )
+    b.body(
+        "The claim that cannot be defended is that the multi-evaluator weighting is the cause of "
+        "either result. On the canonical suite the full adaptive condition was not significantly "
+        "better than the single-metric, static-cascade or unpruned baselines on normalized fitness, "
+        "separating only from the bandit condition, and that condition is itself compromised by a "
+        "horizon too short for its policy to leave initialization. On ARC no ablation was run at "
+        "all. The honest summary is that the framework works end to end and that its cost behaviour "
+        "is established, while the contribution of each individual mechanism remains open."
     )
 
     b.section_heading("7.2", "Future work")
     b.bullets([
-        "Execute the full ablation against a live model. This is the single most valuable extension "
-        "and requires only a paid API tier; the harness, analysis and reporting pipeline already "
-        "support it without modification.",
+        "Run the five-condition ablation on ARC-AGI. The ARC experiment of Section 6.8 used a "
+        "single configuration, so it shows that the search works without showing which of its "
+        "components matter. Repeating it with the single-metric and uniformly weighted conditions "
+        "would isolate the contribution of the multi-evaluator weighting on a benchmark where the "
+        "capability signal is unambiguous. This is the single most valuable extension; the harness "
+        "already supports it and the cost is compute rather than new code.",
+        "Lengthen the optimization horizon. Six generations per cell is too short for two of the "
+        "mechanisms to be exercised at all: UCB1 spends the entire budget playing each arm once, "
+        "and the convergence curves flatten before the conditions can separate on capability. "
+        "Three to four times the horizon is the minimum at which the bandit question can be asked.",
+        "Close the generalization gap identified in Section 6.8.4, where seven of fifteen programs "
+        "that fitted every demonstration pair failed on the held-out input. Candidate approaches "
+        "include penalizing program complexity, requiring agreement between independently evolved "
+        "programs, or holding out one demonstration pair from the fitness signal as an internal "
+        "validation split.",
         "Normalize the objective in place, dividing the weighted score by the active weight mass "
         "so that the optimizer maximizes a quantity comparable across evaluator subsets. The "
         "analysis in Chapter 6 applies this correction after the fact; applying it inside the "

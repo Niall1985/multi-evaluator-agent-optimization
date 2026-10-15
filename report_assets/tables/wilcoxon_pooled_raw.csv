@@ -1,5 +1,5 @@
 metric,comparison,baseline,n_pairs,mean_treatment,mean_baseline,mean_diff,median_diff,wilcoxon_W,p_one_sided,p_two_sided,rank_biserial_effect,significant_0_05
-peak_fitness,full_adaptive vs single_metric,single_metric,26,0.9412,0.8762,0.0649,0.032,88.0,0.012675374746322632,0.025350749492645264,0.499,True
-peak_fitness,full_adaptive vs static_cascade,static_cascade,26,0.9412,0.8561,0.0851,0.0355,0.0,6.1451611051242046e-06,1.2290322210248409e-05,1.0,True
-peak_fitness,full_adaptive vs ucb1_bandit,ucb1_bandit,26,0.9412,0.8558,0.0853,0.0355,0.0,6.1451611051242046e-06,1.2290322210248409e-05,1.0,True
-peak_fitness,full_adaptive vs no_pruning,no_pruning,26,0.9412,0.9618,-0.0206,-0.0125,19.0,0.999996230006218,9.149312973022461e-06,-0.892,False
+peak_fitness,full_adaptive vs single_metric,single_metric,12,0.744,0.798,-0.054,-0.091,26.0,0.849365234375,0.33935546875,-0.333,False
+peak_fitness,full_adaptive vs static_cascade,static_cascade,12,0.744,0.6545,0.0895,0.0877,5.0,0.00244140625,0.0048828125,0.872,True
+peak_fitness,full_adaptive vs ucb1_bandit,ucb1_bandit,12,0.744,0.6704,0.0736,0.0644,14.0,0.026123046875,0.05224609375,0.641,True
+peak_fitness,full_adaptive vs no_pruning,no_pruning,12,0.744,0.8231,-0.0791,-0.0532,3.0,0.999267578125,0.00244140625,-0.923,False

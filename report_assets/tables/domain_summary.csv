@@ -1,11 +1,11 @@
 domain,condition,label,n_runs,mean_peak_fitness,mean_peak_correctness,mean_cost_saved_pct
-coding,full_adaptive,C5 Full adaptive,14,0.9653,0.8571,31.74
-coding,no_pruning,C4 No pruning,14,0.977,0.8571,0.0
-coding,single_metric,C1 Single-metric,14,0.9456,0.8571,94.09
-coding,static_cascade,C2 Static cascade,14,0.9081,0.8571,30.24
-coding,ucb1_bandit,C3 UCB1 bandit,14,0.9077,0.8571,0.0
-sentiment,full_adaptive,C5 Full adaptive,12,0.913,0.425,41.56
-sentiment,no_pruning,C4 No pruning,12,0.9439,0.425,0.0
-sentiment,single_metric,C1 Single-metric,12,0.7953,0.425,94.09
-sentiment,static_cascade,C2 Static cascade,12,0.7954,0.425,33.44
-sentiment,ucb1_bandit,C3 UCB1 bandit,12,0.7953,0.425,0.0
+coding,full_adaptive,C5 Full adaptive,7,0.859,1.0,37.07
+coding,no_pruning,C4 No pruning,7,0.928,1.0,0.0
+coding,single_metric,C1 Single-metric,7,0.9995,1.0,83.33
+coding,static_cascade,C2 Static cascade,7,0.7759,1.0,40.93
+coding,ucb1_bandit,C3 UCB1 bandit,7,0.7903,1.0,0.0
+sentiment,full_adaptive,C5 Full adaptive,5,0.583,0.48,71.83
+sentiment,no_pruning,C4 No pruning,5,0.6762,0.52,0.0
+sentiment,single_metric,C1 Single-metric,5,0.5159,0.48,83.33
+sentiment,static_cascade,C2 Static cascade,5,0.4844,0.48,72.38
+sentiment,ucb1_bandit,C3 UCB1 bandit,5,0.5026,0.48,0.0

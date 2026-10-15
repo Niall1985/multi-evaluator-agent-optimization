@@ -16,3 +16,6 @@ venv/
 
 # Word lock files
 ~$*
+
+# Result archives: the extracted CSVs under results/arc/ are what the report reads.
+*_gen0-*.zip
